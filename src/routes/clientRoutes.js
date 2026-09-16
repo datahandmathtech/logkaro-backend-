@@ -4,11 +4,15 @@ const {
     getClients,
     getClientLedger,
     addPayment,
-    updateClient
+    updateClient,
+    createClient
 } = require('../controllers/clientController');
 const { protect, adminOrExecutive, checkCompany } = require('../middleware/authMiddleware');
 
 router.use(protect);
+
+router.route('/')
+    .post(adminOrExecutive, createClient);
 
 router.route(['/company/:companyId', '/:companyId'])
     .get(adminOrExecutive, checkCompany, getClients);

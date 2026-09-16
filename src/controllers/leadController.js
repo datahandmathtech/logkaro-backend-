@@ -3,6 +3,8 @@ const DRSDuty = require('../models/DRSDuty');
 const Booking = require('../models/Booking');
 const Client = require('../models/Client');
 const LedgerEntry = require('../models/LedgerEntry');
+const BankAccount = require('../models/BankAccount');
+const BankTransaction = require('../models/BankTransaction');
 const Company = require('../models/Company');
 const { getNextSequence, getNextClientCode, previewNextClientCode } = require('../models/Sequence');
 const asyncHandler = require('express-async-handler');
@@ -55,8 +57,17 @@ const getLeads = asyncHandler(async (req, res) => {
         };
         const mStr = MONTH_MAP[month] || month;
         leads = leads.filter(lead => {
-            if (lead.clientCode && lead.clientCode.startsWith(mStr + '/')) return true;
-            const d = new Date(lead.leadDate || lead.createdAt);
+            // Travel month is determined by travelStartDate (fallback to leadDate / createdAt)
+            const travelDate = lead.travelStartDate || lead.leadDate || lead.createdAt;
+            if (!travelDate) return false;
+            if (typeof travelDate === 'string' && travelDate.includes('-')) {
+                const parts = travelDate.split('T')[0].split('-');
+                if (parts.length >= 2) {
+                    return parts[1] === mStr;
+                }
+            }
+            const d = new Date(travelDate);
+            if (isNaN(d.getTime())) return false;
             const m = String(d.getMonth() + 1).padStart(2, '0');
             return m === mStr;
         });
@@ -113,13 +124,19 @@ const createLead = asyncHandler(async (req, res) => {
     const {
         company, clientName, mobileNumber, alternateMobile, email, gstin,
         source, reference, salesPerson, leadDate, travelStartDate, travelEndDate,
-        carType, numberOfCars, itinerary, extraCharges, totalAmount, gstMode, notes,
-        specialRemarks, inclusions
+        carType, numberOfCars, itinerary, extraCharges, totalAmount, gstMode, gstRate, notes,
+        specialRemarks, inclusions, bookingReference, travelAgent, travelAgentName, travelAgentMobile
     } = req.body;
 
     const leadDateObj = leadDate ? new Date(leadDate) : new Date();
     const clientCode = await getNextClientCode(company, leadDateObj);
     const leadId = clientCode;
+
+    // Handle Travel Agent defaults for guest details if not provided
+    const isAgent = bookingReference === 'Travel Agent' || source === 'Agent';
+    const finalBookingRef = isAgent ? 'Travel Agent' : (bookingReference || 'Direct');
+    const finalClientName = clientName && clientName.trim() ? clientName.trim() : (isAgent ? (travelAgentName ? `${travelAgentName} (Guest)` : 'Guest (TBA)') : 'Guest (TBA)');
+    const finalMobile = mobileNumber && mobileNumber.trim() ? mobileNumber.trim() : (isAgent ? (travelAgentMobile || 'TBA') : 'TBA');
 
     // Ensure itinerary items have proper default fields
     const formattedItinerary = (itinerary || []).map((day, idx) => ({
@@ -145,8 +162,12 @@ const createLead = asyncHandler(async (req, res) => {
         clientCode,
         leadId,
         company,
-        clientName,
-        mobileNumber,
+        bookingReference: finalBookingRef,
+        travelAgent: travelAgent || null,
+        travelAgentName: travelAgentName || '',
+        travelAgentMobile: travelAgentMobile || '',
+        clientName: finalClientName,
+        mobileNumber: finalMobile,
         alternateMobile,
         email,
         gstin,
@@ -163,6 +184,7 @@ const createLead = asyncHandler(async (req, res) => {
         extraCharges: extraCharges || [],
         totalAmount: Number(totalAmount) || 0,
         gstMode: gstMode || 'GST Inclusive',
+        gstRate: Number(gstRate) || 5,
         status: 'New',
         notes,
         specialRemarks: specialRemarks || '',
@@ -170,7 +192,8 @@ const createLead = asyncHandler(async (req, res) => {
             driverAllowance: true,
             nightAllowance: true,
             tollParking: true,
-            gstIncluded: true
+            gstIncluded: true,
+            manualRemarks: ''
         }
     });
 
@@ -235,7 +258,10 @@ const deleteLead = asyncHandler(async (req, res) => {
 // @route   POST /api/leads/:id/convert
 // @access  Private/AdminOrExecutive
 const convertToBooking = asyncHandler(async (req, res) => {
-    const { advancePayment, paymentMode, paymentReference, termsAndConditions, notes, adminOverrideReason } = req.body;
+    const {
+        advancePayment, paymentMode, paymentReference, termsAndConditions,
+        notes, adminOverrideReason, bankAccountId, paymentScreenshot
+    } = req.body;
     
     const lead = await Lead.findById(req.params.id);
     if (!lead) {
@@ -257,9 +283,9 @@ const convertToBooking = asyncHandler(async (req, res) => {
     // 1. Generate unique sequential Booking ID (e.g. LK-BKG-2026-00001)
     const bookingId = await getNextSequence('LK-BKG');
 
-    // 2. Determine GST breakdown based on GST mode and company settings
+    // 2. Determine GST breakdown based on GST mode and lead/company settings
     const companyData = await Company.findById(lead.company);
-    const gstRate = companyData?.gstRate || 5;
+    const gstRate = Number(lead.gstRate) || companyData?.gstRate || 5;
     let taxableAmount = 0;
     let gstAmount = 0;
     const totalFare = Number(lead.totalAmount) || 0;
@@ -279,13 +305,23 @@ const convertToBooking = asyncHandler(async (req, res) => {
     const grandTotal = lead.gstMode === 'GST Extra' ? (totalFare + gstAmount) : totalFare;
     const balanceDue = grandTotal - advance;
 
-    // 3. Client & Ledger Records
-    let client = await Client.findOne({ company: lead.company, mobile: lead.mobileNumber });
+    // 3. Client & Ledger Records (Support Travel Agent vs Direct Client)
+    let client = null;
+    if (lead.bookingReference === 'Travel Agent' && lead.travelAgent) {
+        client = await Client.findById(lead.travelAgent);
+    }
+    if (!client && lead.mobileNumber && lead.mobileNumber !== 'TBA') {
+        client = await Client.findOne({ company: lead.company, mobile: lead.mobileNumber });
+    }
+
     if (!client) {
+        const isAgent = lead.bookingReference === 'Travel Agent';
         client = await Client.create({
             company: lead.company,
-            name: lead.clientName,
-            mobile: lead.mobileNumber,
+            name: isAgent ? (lead.travelAgentName || lead.clientName) : lead.clientName,
+            mobile: (lead.mobileNumber && lead.mobileNumber !== 'TBA') ? lead.mobileNumber : `AGENT-${Date.now().toString().slice(-6)}`,
+            clientType: isAgent ? 'Travel Agent' : 'Direct',
+            agencyName: isAgent ? (lead.travelAgentName || '') : '',
             totalBilled: grandTotal,
             totalPaid: advance,
             balance: balanceDue
@@ -297,7 +333,11 @@ const convertToBooking = asyncHandler(async (req, res) => {
         await client.save();
     }
 
-    // Create Bill Entry in Client Ledger
+    // Create Bill Entry in Client / Agent Ledger
+    const billDesc = lead.bookingReference === 'Travel Agent'
+        ? `Booking Confirmed (${bookingId}) - Agent: ${lead.travelAgentName || client.name} (Guest: ${lead.clientName})`
+        : `Booking Confirmed (${bookingId}) - ${lead.clientName}`;
+
     await LedgerEntry.create({
         client: client._id,
         company: lead.company,
@@ -305,7 +345,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         amount: grandTotal,
         taxableAmount,
         gstAmount,
-        description: `Booking Confirmed (${bookingId}) - ${lead.clientName}`,
+        description: billDesc,
         referenceId: lead._id
     });
 
@@ -321,33 +361,75 @@ const convertToBooking = asyncHandler(async (req, res) => {
         });
     }
 
+    // Record into Bank Transaction if Bank Account is selected & advance > 0
+    let bank = null;
+    if (advance > 0 && bankAccountId) {
+        bank = await BankAccount.findById(bankAccountId);
+        if (bank) {
+            await BankTransaction.create({
+                company: lead.company,
+                bankAccount: bank._id,
+                bankName: bank.bankName,
+                type: 'IN',
+                amount: advance,
+                category: 'Booking Advance',
+                paymentMode: paymentMode || 'UPI / QR Code',
+                reference: paymentReference || '',
+                paymentScreenshot: paymentScreenshot || '',
+                description: `Advance for Booking ${bookingId} (${lead.clientCode || lead.leadId}) - ${lead.clientName}`,
+                leadRef: lead._id,
+                clientRef: client._id,
+                date: new Date(),
+                createdBy: req.user ? req.user._id : null
+            });
+            bank.currentBalance += advance;
+            await bank.save();
+        }
+    }
+
     // 4. Create Day-wise DRS entries for each car
     const numberOfCars = lead.numberOfCars || 1;
     const drsEntries = [];
 
-    for (const day of lead.itinerary) {
+    const isAgent = lead.bookingReference === 'Travel Agent' || lead.source === 'Agent';
+    const agentName = lead.travelAgentName || (client && client.clientType === 'Travel Agent' ? (client.agencyName || client.name) : '');
+    const agentMob = lead.travelAgentMobile || (client && client.clientType === 'Travel Agent' ? client.mobile : '');
+
+    for (const [idx, day] of (lead.itinerary || []).entries()) {
+        const dayNo = day.dayNo || (idx + 1);
         for (let i = 0; i < numberOfCars; i++) {
             const dutyText = day.duty || day.description || 'Scheduled Duty';
             const carLabel = numberOfCars > 1 ? ` (Car ${i + 1}/${numberOfCars})` : '';
             
+            // DRS Display for Driver:
+            // Hotel/Source: Show Agent Name if Agent booking
+            // Guest Name: Show real guest name if given, or Placard with Agent name
+            // Mobile: Show guest mobile, or Agent mobile so driver can contact
+            const hotelDisplay = isAgent && agentName ? `Agent: ${agentName}` : (day.pickupPoint || lead.source || 'Direct');
+            const hasRealGuest = lead.clientName && !lead.clientName.toLowerCase().includes('guest (tba)') && !lead.clientName.toLowerCase().includes('client');
+            const guestDisplay = hasRealGuest ? `${lead.clientName}${carLabel}` : (agentName ? `Placard: ${agentName}${carLabel}` : `Guest (TBA)${carLabel}`);
+            const hasRealMob = lead.mobileNumber && lead.mobileNumber !== 'TBA' && lead.mobileNumber.trim().length > 0;
+            const mobDisplay = hasRealMob ? lead.mobileNumber : (agentMob ? `Agent: ${agentMob}` : 'PLACARD');
+
             const entry = await DRSDuty.create({
                 company: lead.company,
                 leadId: lead._id,
                 bookingId: bookingId,
-                clientName: `${lead.clientName}${carLabel}`,
-                mobileNumber: lead.mobileNumber,
+                clientName: guestDisplay,
+                mobileNumber: mobDisplay,
+                hotel: hotelDisplay,
                 date: day.date,
                 time: day.time || '09:00 AM',
                 pickupPoint: day.pickupPoint || '',
                 duty: dutyText,
-                dayNo: day.dayNo || 1,
+                dayNo: dayNo,
                 carType: day.vehicleType || lead.carType,
                 itinerary: dutyText,
                 revenue: day.amount || 0,
                 paymentStatus: advance > 0 ? (balanceDue <= 0 ? 'Full Received' : 'Advance Received') : 'Pending',
                 status: 'Scheduled',
-                isDirectBooking: false,
-                guestRemarks: day.specialNotes || ''
+                isDirectBooking: !isAgent,
+                guestRemarks: day.specialNotes || (isAgent ? `Agent Booking: ${agentName}` : '')
             });
             drsEntries.push(entry._id);
         }
@@ -362,6 +444,15 @@ const convertToBooking = asyncHandler(async (req, res) => {
         client: client._id,
         salesPerson: lead.salesPerson,
         source: lead.source || lead.reference || 'Direct',
+        bookingReference: isAgent ? 'Travel Agent' : (lead.bookingReference || 'Direct'),
+        travelAgent: lead.travelAgent || null,
+        travelAgentName: agentName,
+        travelAgentMobile: agentMob,
+        bankAccount: bank ? bank._id : null,
+        bankName: bank ? bank.bankName : '',
+        paymentMode: paymentMode || '',
+        paymentReference: paymentReference || '',
+        paymentScreenshot: paymentScreenshot || '',
         clientName: lead.clientName,
         mobileNumber: lead.mobileNumber,
         alternateMobile: lead.alternateMobile,
@@ -392,6 +483,19 @@ const convertToBooking = asyncHandler(async (req, res) => {
         drsDuties: drsEntries
     });
 
+    // Backfill bookingRef on all created DRS duty records
+    if (drsEntries.length > 0) {
+        await DRSDuty.updateMany(
+            { _id: { $in: drsEntries } },
+            { $set: { bookingRef: booking._id } }
+        );
+    }
+
+    // Link bookingRef to BankTransaction if created
+    if (advance > 0 && bank) {
+        await BankTransaction.updateMany({ leadRef: lead._id, bookingRef: null }, { bookingRef: booking._id });
+    }
+
     // 6. Update lead status and reference, and link drsDuties with bookingRef
     if (drsEntries.length > 0) {
         await DRSDuty.updateMany(
@@ -408,6 +512,8 @@ const convertToBooking = asyncHandler(async (req, res) => {
 
     res.json({
         message: 'Booking confirmed successfully',
+        clientCode: lead.clientCode || lead.leadId,
+        bookingId: bookingId,
         booking,
         lead,
         createdDutiesCount: drsEntries.length

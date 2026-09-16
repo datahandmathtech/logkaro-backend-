@@ -59,6 +59,7 @@ const bookingRoutes = require('./routes/bookingRoutes');
 const drsRoutes = require('./routes/drsRoutes');
 const clientRoutes = require('./routes/clientRoutes');
 const invoiceRoutes = require('./routes/invoiceRoutes');
+const bankRoutes = require('./routes/bankRoutes');
 
 app.use('/api/auth', authRoutes);
 
@@ -90,6 +91,7 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/drs', drsRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/invoices', invoiceRoutes);
+app.use('/api/banks', bankRoutes);
 
 app.get('/api/db-check', async (req, res) => {
     const status = mongoose.connection.readyState;

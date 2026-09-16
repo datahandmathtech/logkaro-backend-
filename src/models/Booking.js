@@ -59,13 +59,31 @@ const bookingSchema = new mongoose.Schema({
         type: String,
         default: 'Direct'
     },
+    bookingReference: {
+        type: String,
+        enum: ['Direct', 'Travel Agent'],
+        default: 'Direct'
+    },
+    travelAgent: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Client',
+        default: null
+    },
+    travelAgentName: {
+        type: String,
+        default: ''
+    },
+    travelAgentMobile: {
+        type: String,
+        default: ''
+    },
     clientName: {
         type: String,
-        required: true
+        default: 'Guest (TBA)'
     },
     mobileNumber: {
         type: String,
-        required: true
+        default: 'TBA'
     },
     alternateMobile: {
         type: String,
@@ -139,6 +157,27 @@ const bookingSchema = new mongoose.Schema({
         type: String,
         enum: ['No Advance', 'Advance Received', 'Partial', 'Full Received', 'Refund Due', 'Settled'],
         default: 'Advance Received'
+    },
+    paymentMode: {
+        type: String,
+        default: ''
+    },
+    paymentReference: {
+        type: String,
+        default: ''
+    },
+    bankAccount: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankAccount',
+        default: null
+    },
+    bankName: {
+        type: String,
+        default: ''
+    },
+    paymentScreenshot: {
+        type: String,
+        default: ''
     },
     termsAndConditions: [{
         type: String

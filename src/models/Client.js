@@ -6,6 +6,27 @@ const clientSchema = new mongoose.Schema({
         ref: 'Company',
         required: true
     },
+    clientType: {
+        type: String,
+        enum: ['Direct', 'Travel Agent', 'Corporate'],
+        default: 'Direct'
+    },
+    agencyName: {
+        type: String,
+        default: ''
+    },
+    contactPerson: {
+        type: String,
+        default: ''
+    },
+    city: {
+        type: String,
+        default: ''
+    },
+    email: {
+        type: String,
+        default: ''
+    },
     name: {
         type: String,
         required: true

@@ -187,55 +187,80 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
         await booking.save();
 
         // Sync each day into DRSDuty
-        for (const day of itinerary) {
-            const dayNo = day.dayNo || 1;
-            const dateStr = day.date ? new Date(day.date).toISOString().split('T')[0] : null;
-
-            let dutyQuery = {
-                $or: [
-                    { bookingRef: booking._id, dayNo: dayNo },
-                    { bookingId: booking.bookingId, dayNo: dayNo }
-                ]
-            };
-
-            let existingDuty = await DRSDuty.findOne(dutyQuery);
-
-            if (!existingDuty && dateStr) {
-                existingDuty = await DRSDuty.findOne({
-                    bookingRef: booking._id,
-                    date: {
-                        $gte: new Date(`${dateStr}T00:00:00.000Z`),
-                        $lte: new Date(`${dateStr}T23:59:59.999Z`)
-                    }
-                });
+        for (const [idx, day] of itinerary.entries()) {
+            const dayNo = day.dayNo || (idx + 1);
+            let dateStr = null;
+            if (day.date) {
+                try {
+                    dateStr = new Date(day.date).toISOString().split('T')[0];
+                } catch (_) {}
             }
 
-            const driverId = day.driverId || day.driver || null;
+            const driverId = day.driverId && day.driverId !== 'custom' && day.driverId !== '__custom__' ? day.driverId : null;
             const driverName = day.driverName || day.customDriverName || '';
             const driverPhone = day.driverPhone || day.driverMobile || '';
             const vehicleId = day.vehicleId || day.vehicle || null;
             const vehicleNumber = day.vehicleNumber || day.customCarNumber || '';
             const isAssigned = !!(driverId || driverName);
 
-            if (existingDuty) {
-                existingDuty.driver = driverId;
-                existingDuty.customDriverName = driverName;
-                existingDuty.driverMobile = driverPhone;
-                existingDuty.vehicle = vehicleId;
-                existingDuty.customCarNumber = vehicleNumber;
-                existingDuty.status = isAssigned ? 'Assigned' : 'Scheduled';
-                if (day.time) existingDuty.time = day.time;
+            // Broad query to match duties created either during lead conversion or previous saves
+            const matchConditions = [
+                { bookingRef: booking._id },
+                { bookingId: booking.bookingId }
+            ];
+            if (booking.lead) {
+                matchConditions.push({ leadId: booking.lead });
+            }
+
+            let candidateDuties = await DRSDuty.find({ $or: matchConditions });
+
+            // Find matching candidate by dayNo or calendar date
+            let matchingDuty = candidateDuties.find(d => d.dayNo === dayNo);
+            if (!matchingDuty && dateStr) {
+                matchingDuty = candidateDuties.find(d => {
+                    if (!d.date) return false;
+                    try {
+                        return new Date(d.date).toISOString().split('T')[0] === dateStr;
+                    } catch (_) {
+                        return false;
+                    }
+                });
+            }
+
+            if (matchingDuty) {
+                matchingDuty.bookingRef = booking._id;
+                matchingDuty.bookingId = booking.bookingId;
+                matchingDuty.dayNo = dayNo;
+                matchingDuty.driver = driverId;
+                matchingDuty.customDriverName = driverName;
+                matchingDuty.driverMobile = driverPhone;
+                matchingDuty.vehicle = vehicleId;
+                matchingDuty.customCarNumber = vehicleNumber;
+                matchingDuty.status = isAssigned ? 'Assigned' : (matchingDuty.status || 'Scheduled');
+                if (day.time) matchingDuty.time = day.time;
                 if (day.duty || day.description) {
-                    existingDuty.duty = day.duty || day.description;
-                    existingDuty.itinerary = day.duty || day.description;
+                    matchingDuty.duty = day.duty || day.description;
+                    matchingDuty.itinerary = day.duty || day.description;
                 }
-                await existingDuty.save();
+                if (day.km) matchingDuty.km = day.km;
+                await matchingDuty.save();
+
+                // Clean up any other duplicates for this same day
+                const duplicates = candidateDuties.filter(d => 
+                    String(d._id) !== String(matchingDuty._id) && 
+                    (d.dayNo === dayNo || (dateStr && d.date && new Date(d.date).toISOString().split('T')[0] === dateStr))
+                );
+                if (duplicates.length > 0) {
+                    const dupIds = duplicates.map(d => d._id);
+                    await DRSDuty.deleteMany({ _id: { $in: dupIds } });
+                }
             } else {
                 const dutyText = day.duty || day.description || 'Scheduled Duty';
                 const newDuty = await DRSDuty.create({
                     company: booking.company,
                     bookingRef: booking._id,
                     bookingId: booking.bookingId,
+                    leadId: booking.lead || null,
                     clientName: booking.clientName,
                     mobileNumber: booking.mobileNumber,
                     date: day.date || booking.travelStartDate || new Date(),
@@ -251,6 +276,7 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     vehicle: vehicleId,
                     customCarNumber: vehicleNumber,
                     revenue: day.amount || 0,
+                    km: day.km || '',
                     paymentStatus: booking.paymentStatus === 'Full Received' ? 'Full Received' : 'Advance Received',
                     status: isAssigned ? 'Assigned' : 'Scheduled',
                     isDirectBooking: false

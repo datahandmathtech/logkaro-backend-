@@ -60,6 +60,10 @@ const drsDutySchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    km: {
+        type: String,
+        default: ''
+    },
     driver: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

@@ -22,15 +22,14 @@ const getDRSDuties = asyncHandler(async (req, res) => {
         };
     } else if (date && date !== 'all') {
         const dateStr = typeof date === 'string' ? date.split('T')[0] : new Date(date).toISOString().split('T')[0];
-        const startOfDay = new Date(`${dateStr}T00:00:00.000Z`);
-        const endOfDay = new Date(`${dateStr}T23:59:59.999Z`);
-        // Expand buffer by 14 hours to accommodate any timezone shift between client and server
-        const bufferStart = new Date(startOfDay.getTime() - (14 * 60 * 60 * 1000));
-        const bufferEnd = new Date(endOfDay.getTime() + (14 * 60 * 60 * 1000));
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const startOfDay = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+        const istStart = new Date(startOfDay.getTime() - (5.5 * 60 * 60 * 1000));
+        const istEnd = new Date(startOfDay.getTime() + (23.99 * 60 * 60 * 1000));
 
         query.date = {
-            $gte: bufferStart,
-            $lte: bufferEnd
+            $gte: istStart,
+            $lte: istEnd
         };
     }
 
@@ -65,7 +64,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
     const {
         company, clientName, mobileNumber, hotel, date, time,
         carType, customCarNumber, driver, customDriverName, vehicle, itinerary,
-        revenue, cOut, status,
+        revenue, cOut, status, km,
         leadId, bookingId, bookingRef, pickupPoint, duty: dutyText, guestRemarks
     } = req.body;
 
@@ -85,6 +84,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
         duty: dutyText || itinerary || 'City Duty',
         pickupPoint: pickupPoint || '',
         revenue: Number(revenue) || 0,
+        km: km || '',
         cOut: cOut || '',
         status: status || (driver || customDriverName ? 'Assigned' : 'Pending'),
         leadId: leadId || null,

@@ -65,9 +65,53 @@ const updateClient = asyncHandler(async (req, res) => {
 });
 
 
+// @desc    Create or enlist a client / travel agent
+// @route   POST /api/clients
+// @access  Private/Admin
+const createClient = asyncHandler(async (req, res) => {
+    const { company, name, mobile, clientType, agencyName, contactPerson, city, email, gstNumber, address } = req.body;
+    if (!company || !name) {
+        res.status(400);
+        throw new Error('Company and name are required');
+    }
+
+    const cleanMobile = mobile && mobile.trim() ? mobile.trim() : `AGENT-${Date.now().toString().slice(-6)}`;
+    
+    // Check if client with this mobile exists in company
+    let client = await Client.findOne({ company, mobile: cleanMobile });
+    if (client) {
+        client.clientType = clientType || client.clientType;
+        client.agencyName = agencyName || client.agencyName;
+        client.contactPerson = contactPerson || client.contactPerson;
+        client.city = city || client.city;
+        client.email = email || client.email;
+        client.name = name || client.name;
+        if (gstNumber) client.gstNumber = gstNumber;
+        if (address) client.address = address;
+        await client.save();
+        return res.json(client);
+    }
+
+    client = await Client.create({
+        company,
+        name,
+        mobile: cleanMobile,
+        clientType: clientType || 'Direct',
+        agencyName: agencyName || '',
+        contactPerson: contactPerson || '',
+        city: city || '',
+        email: email || '',
+        gstNumber: gstNumber || '',
+        address: address || ''
+    });
+
+    res.status(201).json(client);
+});
+
 module.exports = {
     getClients,
     getClientLedger,
     addPayment,
-    updateClient
+    updateClient,
+    createClient
 };

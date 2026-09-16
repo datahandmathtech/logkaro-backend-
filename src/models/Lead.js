@@ -45,13 +45,31 @@ const leadSchema = new mongoose.Schema({
         ref: 'User',
         default: null
     },
+    bookingReference: {
+        type: String,
+        enum: ['Direct', 'Travel Agent'],
+        default: 'Direct'
+    },
+    travelAgent: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Client',
+        default: null
+    },
+    travelAgentName: {
+        type: String,
+        default: ''
+    },
+    travelAgentMobile: {
+        type: String,
+        default: ''
+    },
     clientName: {
         type: String,
-        required: true
+        default: 'Guest (TBA)'
     },
     mobileNumber: {
         type: String,
-        required: true,
+        default: 'TBA',
         index: true
     },
     alternateMobile: {
@@ -111,6 +129,10 @@ const leadSchema = new mongoose.Schema({
         enum: ['GST Extra', 'GST Inclusive', 'No GST', 'RCM'],
         default: 'GST Inclusive'
     },
+    gstRate: {
+        type: Number,
+        default: 5
+    },
     status: {
         type: String,
         enum: ['New', 'Follow-up', 'Quoted', 'Negotiation', 'Confirmed', 'Lost', 'Cancelled'],
@@ -137,7 +159,8 @@ const leadSchema = new mongoose.Schema({
         driverAllowance: { type: Boolean, default: true },
         nightAllowance: { type: Boolean, default: true },
         tollParking: { type: Boolean, default: true },
-        gstIncluded: { type: Boolean, default: true }
+        gstIncluded: { type: Boolean, default: true },
+        manualRemarks: { type: String, default: '' }
     }
 }, {
     timestamps: true
