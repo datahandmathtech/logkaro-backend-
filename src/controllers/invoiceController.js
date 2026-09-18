@@ -379,7 +379,7 @@ const deleteInvoice = asyncHandler(async (req, res) => {
         await LedgerEntry.deleteMany({ referenceId: invoice.booking, type: { $ne: 'Fuel' } });
         
         // Also delete BankTransactions linked to this booking
-        await BankTransaction.deleteMany({ referenceId: invoice.booking });
+        await BankTransaction.deleteMany({ bookingRef: invoice.booking });
         
         // Also update the booking advancePaid to 0
         const Booking = require('../models/Booking');
