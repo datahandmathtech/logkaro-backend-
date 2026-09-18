@@ -213,12 +213,27 @@ const updateLead = asyncHandler(async (req, res) => {
         throw new Error('Lead not found');
     }
 
+    // Clean empty strings for ObjectId fields to prevent CastError
+    ['travelAgent', 'salesUser', 'bookingRef'].forEach(field => {
+        if (req.body[field] === '' || req.body[field] === 'null' || !req.body[field]) {
+            req.body[field] = null;
+        }
+    });
+
     if (req.body.itinerary) {
         req.body.itinerary = req.body.itinerary.map((day, idx) => ({
             ...day,
             dayNo: day.dayNo || (idx + 1),
-            description: day.description || day.duty || 'Standard Duty'
+            rate: Number(day.rate) || 0,
+            amount: Number(day.amount) || ((Number(day.rate) || 0) * (Number(day.vehicleCount || day.quantity) || 1)),
+            vehicleCount: Number(day.vehicleCount || day.quantity) || 1,
+            duty: day.duty || day.route || day.description || '',
+            description: day.duty || day.route || day.description || 'Standard Duty'
         }));
+    }
+
+    if (req.body.totalAmount !== undefined) {
+        req.body.totalAmount = Number(req.body.totalAmount) || 0;
     }
 
     const updatedLead = await Lead.findByIdAndUpdate(
