@@ -22,6 +22,12 @@ const extraChargeSchema = new mongoose.Schema({
     amount: { type: Number, required: true, default: 0 }
 });
 
+const remarkSchema = new mongoose.Schema({
+    text: { type: String, required: true },
+    date: { type: Date, default: Date.now },
+    attachmentUrl: { type: String, default: null }
+});
+
 const leadSchema = new mongoose.Schema({
     clientCode: {
         type: String,
@@ -124,6 +130,10 @@ const leadSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    advanceDate: {
+        type: Date,
+        default: null
+    },
     gstMode: {
         type: String,
         enum: ['GST Extra', 'GST Inclusive', 'No GST', 'RCM'],
@@ -161,7 +171,8 @@ const leadSchema = new mongoose.Schema({
         tollParking: { type: Boolean, default: true },
         gstIncluded: { type: Boolean, default: true },
         manualRemarks: { type: String, default: '' }
-    }
+    },
+    remarksHistory: [remarkSchema]
 }, {
     timestamps: true
 });

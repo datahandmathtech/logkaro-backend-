@@ -276,7 +276,7 @@ const deleteLead = asyncHandler(async (req, res) => {
 // @access  Private/AdminOrExecutive
 const convertToBooking = asyncHandler(async (req, res) => {
     const {
-        advancePayment, paymentMode, paymentReference, termsAndConditions,
+        advancePayment, advancePaymentDate, paymentMode, paymentReference, termsAndConditions,
         notes, adminOverrideReason, bankAccountId, paymentScreenshot
     } = req.body;
     
@@ -482,7 +482,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         numberOfCars: lead.numberOfCars,
         itinerary: lead.itinerary,
         totalAmount: grandTotal,
-        advancePaid: advance,
+        advancePaid: advance, advanceDate: advancePaymentDate || new Date(),
         balanceDue: balanceDue,
         gstMode: lead.gstMode,
         gstRate,
@@ -523,6 +523,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
 
     lead.status = 'Confirmed';
     lead.advancePayment = advance;
+    lead.advanceDate = advancePaymentDate || new Date();
     lead.bookingId = bookingId;
     lead.bookingRef = booking._id;
     await lead.save();
@@ -537,6 +538,32 @@ const convertToBooking = asyncHandler(async (req, res) => {
     });
 });
 
+// @desc    Add a remark to a lead
+// @route   POST /api/leads/:id/remarks
+// @access  Private/Admin
+const addLeadRemark = asyncHandler(async (req, res) => {
+    const { text, attachmentUrl } = req.body;
+    
+    if (!text) {
+        return res.status(400).json({ message: 'Remark text is required' });
+    }
+
+    const lead = await Lead.findById(req.params.id);
+    
+    if (!lead) {
+        return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    lead.remarksHistory.push({
+        text,
+        attachmentUrl: attachmentUrl || null,
+        date: new Date()
+    });
+
+    await lead.save();
+    res.status(201).json(lead);
+});
+
 module.exports = {
     getLeads,
     checkDuplicatePhone,
@@ -545,5 +572,6 @@ module.exports = {
     updateLead,
     deleteLead,
     convertToBooking,
-    getNextClientCodePreview
+    getNextClientCodePreview,
+    addLeadRemark
 };

@@ -37,10 +37,47 @@ const getBookings = asyncHandler(async (req, res) => {
         ];
     }
 
+    
     const bookings = await Booking.find(query)
         .populate('lead', 'leadId status totalAmount')
         .populate('client', 'name mobile balance')
         .sort({ createdAt: -1 });
+
+    
+    // Lazy auto-complete check: if trip end date has passed by at least 1 day OR balance is 0, move to completed
+    const now = new Date();
+    let hasUpdates = false;
+    for (let b of bookings) {
+        if (b.bookingStatus === 'Confirmed' || b.bookingStatus === 'Ongoing') {
+            let shouldComplete = false;
+            
+            // Check 1: Balance is 0
+            if (b.balanceDue <= 0 && b.advancePaid > 0) {
+                shouldComplete = true;
+            }
+            
+            // Check 2: Date has passed
+            const endDate = b.travelEndDate ? new Date(b.travelEndDate) : null;
+            if (endDate && !shouldComplete) {
+                const nextDay = new Date(endDate);
+                nextDay.setDate(nextDay.getDate() + 1);
+                nextDay.setHours(0,0,0,0);
+                if (now >= nextDay) {
+                    shouldComplete = true;
+                }
+            }
+            
+            if (shouldComplete) {
+                b.bookingStatus = 'Completed';
+                await b.save();
+                hasUpdates = true;
+            }
+        }
+    }
+
+    
+    // If we updated any, just return the updated array directly without re-fetching
+
 
     res.json(bookings);
 });
@@ -69,7 +106,8 @@ const getBookingById = asyncHandler(async (req, res) => {
     res.json(booking);
 });
 
-// @desc    Update a booking
+
+// @desc    Update a booking (cars, days, prices, itinerary)
 // @route   PUT /api/bookings/single/:id
 // @access  Private/AdminOrExecutive
 const updateBooking = asyncHandler(async (req, res) => {
@@ -79,22 +117,42 @@ const updateBooking = asyncHandler(async (req, res) => {
         throw new Error('Booking not found');
     }
 
-    const { bookingStatus, paymentStatus, notes, termsAndConditions } = req.body;
+    const { 
+        bookingStatus, paymentStatus, notes, termsAndConditions,
+        vehicleType, totalAmount, travelStartDate, travelEndDate,
+        pickupLocation, dropLocation, itinerary, adminOverride, advancePaid
+    } = req.body;
 
     if (bookingStatus) booking.bookingStatus = bookingStatus;
     if (paymentStatus) booking.paymentStatus = paymentStatus;
     if (notes !== undefined) booking.notes = notes;
     if (termsAndConditions) booking.termsAndConditions = termsAndConditions;
+    
+    // Core edit fields
+    if (vehicleType) booking.vehicleType = vehicleType;
+    if (totalAmount !== undefined) booking.totalAmount = Number(totalAmount);
+    if (travelStartDate) booking.travelStartDate = new Date(travelStartDate);
+    if (travelEndDate) booking.travelEndDate = new Date(travelEndDate);
+    if (pickupLocation !== undefined) booking.pickupLocation = pickupLocation;
+    if (dropLocation !== undefined) booking.dropLocation = dropLocation;
+    
+    if (itinerary) {
+        booking.itinerary = itinerary;
+    }
+
+    // Recalculate balance
+    booking.balanceDue = booking.totalAmount - (booking.advancePaid || 0);
 
     await booking.save();
     res.json(booking);
 });
 
+
 // @desc    Record a payment against a booking
 // @route   POST /api/bookings/:id/payment
 // @access  Private/AdminOrExecutive
 const recordBookingPayment = asyncHandler(async (req, res) => {
-    const { amount, paymentMode, paymentReference, notes } = req.body;
+    const { amount, paymentMode, paymentReference, paymentDate, notes } = req.body;
     const paymentAmount = Number(amount);
 
     if (!paymentAmount || paymentAmount <= 0) {
@@ -113,6 +171,7 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
 
     if (booking.balanceDue <= 0) {
         booking.paymentStatus = 'Full Received';
+        booking.bookingStatus = 'Completed'; // Auto-complete on full payment
     } else {
         booking.paymentStatus = 'Partial';
     }
@@ -163,7 +222,7 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
                 description: `Payment Received - ${booking.clientName}`,
                 bookingRef: booking._id,
                 clientRef: booking.client || null,
-                date: new Date(),
+                date: paymentDate ? new Date(paymentDate) : new Date(),
                 createdBy: req.user ? req.user._id : null
             });
             bank.currentBalance = (bank.currentBalance || 0) + paymentAmount;
@@ -179,32 +238,69 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
     });
 });
 
+
 // @desc    Cancel a booking
 // @route   POST /api/bookings/:id/cancel
 // @access  Private/AdminOrExecutive
 const cancelBooking = asyncHandler(async (req, res) => {
-    const { reason } = req.body;
+    const { reason, refundAmount, refundMode } = req.body;
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) {
         res.status(404);
         throw new Error('Booking not found');
     }
+    
+    const advancePaid = booking.advancePaid || 0;
+    const refund = Number(refundAmount) || 0;
+    
+    // Process refund logic
+    if (refund > 0) {
+        const LedgerEntry = require('../models/LedgerEntry'); // ensure it's required
+        await LedgerEntry.create({
+            client: booking.client,
+            company: booking.company,
+            type: 'Refund',
+            amount: refund,
+            description: `Refund for cancelled booking ${booking.bookingCode || booking.bookingId} via ${refundMode || 'Bank'}`,
+            referenceId: booking._id,
+            date: new Date()
+        });
+        booking.advancePaid -= refund; // Retained amount
+    }
 
-    booking.bookingStatus = 'Cancelled';
-    booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled: ${reason || 'Customer request'}`;
-    await booking.save();
+    const retainedAmount = advancePaid - refund;
+    
+    if (retainedAmount > 0) {
+        // If money is retained, move to Completed (for Tax Invoice processing)
+        booking.bookingStatus = 'Completed';
+        booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled (Retained ₹${retainedAmount}): ${reason || 'Customer request'}`;
+    } else {
+        // Full refund or no advance, move to Cancelled (Lost)
+        booking.bookingStatus = 'Cancelled';
+        booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled (Fully Refunded): ${reason || 'Customer request'}`;
+        
+        // Remove ledger entries as per request: "no account ledger will show there"
+        const LedgerEntry = require('../models/LedgerEntry');
+        await LedgerEntry.deleteMany({ referenceId: booking._id });
+        booking.advancePaid = 0;
+    }
 
     // Also cancel all linked DRS duties
     if (booking.drsDuties && booking.drsDuties.length > 0) {
+        const DRSDuty = require('../models/DRSDuty'); // Ensure required
         await DRSDuty.updateMany(
             { _id: { $in: booking.drsDuties } },
             { $set: { status: 'Cancelled' } }
         );
     }
+    
+    // Save booking
+    await booking.save();
 
-    res.json({ message: 'Booking and linked duties cancelled successfully', booking });
+    res.json({ message: 'Booking cancelled successfully', booking });
 });
+
 
 // @desc    Assign driver and vehicle to booking itinerary days and shoot into DRS
 // @route   POST /api/bookings/:id/assign-drivers

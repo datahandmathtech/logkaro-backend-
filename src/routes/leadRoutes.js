@@ -8,7 +8,8 @@ const {
     updateLead,
     deleteLead,
     convertToBooking,
-    getNextClientCodePreview
+    getNextClientCodePreview,
+    addLeadRemark
 } = require('../controllers/leadController');
 const { adminOrExecutive, checkCompany, protect } = require('../middleware/authMiddleware');
 
@@ -30,6 +31,8 @@ router.route('/single/:id')
     .get(adminOrExecutive, getLeadById)
     .put(adminOrExecutive, updateLead)
     .delete(adminOrExecutive, deleteLead);
+
+router.post('/:id/remarks', adminOrExecutive, addLeadRemark);
 
 router.post('/:id/convert', adminOrExecutive, convertToBooking);
 

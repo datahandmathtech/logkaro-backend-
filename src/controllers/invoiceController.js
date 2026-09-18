@@ -357,22 +357,61 @@ const updateInvoiceStatus = asyncHandler(async (req, res) => {
 // @route   DELETE /api/invoices/:id
 // @access  Private/Admin
 const deleteInvoice = asyncHandler(async (req, res) => {
+    
     const invoice = await Invoice.findById(req.params.id);
     if (!invoice) {
         res.status(404);
         throw new Error('Invoice not found');
     }
-
-    if (invoice.status !== 'Draft') {
-        res.status(400);
-        throw new Error('Only Draft invoices can be permanently deleted. Use Cancel for issued invoices.');
+    
+    // Remove link from Booking if exists
+    if (invoice.booking) {
+        const Booking = require('../models/Booking');
+        await Booking.findByIdAndUpdate(invoice.booking, { $unset: { taxInvoiceId: "" } });
+    }
+    
+    // Request 3: Delete Client Ledger & Payment entries if invoice deleted
+    if (invoice.booking) {
+        const LedgerEntry = require('../models/LedgerEntry');
+        const BankTransaction = require('../models/BankTransaction');
+        
+        // Delete all LedgerEntries linked to this booking except Fuel
+        await LedgerEntry.deleteMany({ referenceId: invoice.booking, type: { $ne: 'Fuel' } });
+        
+        // Also delete BankTransactions linked to this booking
+        await BankTransaction.deleteMany({ referenceId: invoice.booking });
+        
+        // Also update the booking advancePaid to 0
+        const Booking = require('../models/Booking');
+        await Booking.findByIdAndUpdate(invoice.booking, { advancePaid: 0 });
     }
 
     await invoice.deleteOne();
-    res.json({ message: 'Draft invoice deleted successfully' });
+    res.json({ message: 'Invoice removed successfully' });
+
+});
+
+
+// @desc    Update invoice
+// @route   PUT /api/invoices/:id
+// @access  Private/AdminOrExecutive
+const updateInvoice = asyncHandler(async (req, res) => {
+    const invoice = await Invoice.findById(req.params.id);
+    if (!invoice) {
+        res.status(404);
+        throw new Error('Invoice not found');
+    }
+    
+    if (req.body.billTo) invoice.billTo = req.body.billTo;
+    if (req.body.gstMode) invoice.gstMode = req.body.gstMode;
+    // can expand fields if needed
+    
+    await invoice.save();
+    res.json(invoice);
 });
 
 module.exports = {
+    updateInvoice,
     createInvoice,
     getInvoices,
     getInvoiceById,

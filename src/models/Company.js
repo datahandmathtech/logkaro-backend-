@@ -40,6 +40,13 @@ const companySchema = new mongoose.Schema({
     gstNumber: {
         type: String,
         default: ''
+    },
+    leadSources: {
+        type: [String],
+        default: [
+            'Website', 'Google Ads', 'Repeat Guest', 'Hotel', 'Referral',
+            'Walk-in', 'B2B/Agent', 'Social Media', 'JustDial', 'Other'
+        ]
     }
 }, { timestamps: true });
 

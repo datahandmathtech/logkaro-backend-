@@ -5,7 +5,8 @@ const {
     getInvoices,
     getInvoiceById,
     updateInvoiceStatus,
-    deleteInvoice
+    deleteInvoice,
+    updateInvoice
 } = require('../controllers/invoiceController');
 const { adminOrExecutive, checkCompany, protect } = require('../middleware/authMiddleware');
 
@@ -19,7 +20,8 @@ router.route(['/:companyId', '/company/:companyId'])
 
 router.route('/single/:id')
     .get(adminOrExecutive, getInvoiceById)
-    .delete(adminOrExecutive, deleteInvoice);
+    .delete(adminOrExecutive, deleteInvoice)
+    .put(adminOrExecutive, updateInvoice);
 
 router.route('/:id/status')
     .put(adminOrExecutive, updateInvoiceStatus);
