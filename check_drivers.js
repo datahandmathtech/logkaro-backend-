@@ -1,14 +1,1 @@
-require('dotenv').config();
-const mongoose = require('mongoose');
-
-async function run() {
-    await mongoose.connect(process.env.MONGODB_URI);
-    const User = mongoose.connection.db.collection('users');
-    const abhiId = new mongoose.Types.ObjectId('6a6ae0b1c21904a20a92919a');
-    const drivers = await User.find({ company: abhiId, role: { $in: ['Driver', 'driver'] } }).toArray();
-    console.log('Total Drivers:', drivers.length);
-    console.log(drivers.map(d => d.name).slice(0, 10));
-    process.exit(0);
-}
-
-run().catch(console.error);
+const mongoose = require('mongoose'); mongoose.connect('mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/taxi-fleet?authSource=admin&tls=true').then(async () => { const User = require('./src/models/User'); const admin = await User.findOne({ role: 'SuperAdmin' }).lean(); console.log(admin._id, admin.company); process.exit(); });
