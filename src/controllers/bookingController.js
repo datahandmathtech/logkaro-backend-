@@ -53,7 +53,7 @@ const getBookings = asyncHandler(async (req, res) => {
             
             
             // Check 1: Balance is 0
-            const actualBalance = (b.packagePrice || 0) - (b.advancePaid || 0);
+            const actualBalance = (b.packagePrice || b.totalAmount || 0) - (b.advancePaid || 0);
             if (actualBalance <= 0 && b.advancePaid > 0) {
                 shouldComplete = true;
             }
