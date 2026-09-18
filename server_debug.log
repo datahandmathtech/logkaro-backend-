@@ -695,3 +695,34 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-09-18T07:50:01.062Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-09-18T07:50:03.999Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-09-18T07:51:32.821Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T08:48:59.604Z] Login attempt started
+[2026-09-18T08:48:59.605Z] Login request for: Kavishuser1
+[2026-09-18T08:48:59.843Z] User found: Yatree (Role: Admin)
+[2026-09-18T08:48:59.956Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-09-18T08:48:59.957Z] Password matched
+[2026-09-18T08:48:59.957Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-09-18T08:49:10.118Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T08:49:13.519Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T08:49:23.394Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T08:49:23.745Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-09-18T08:49:23.789Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T08:49:24.689Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-09-18T08:49:40.463Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T08:49:43.312Z] GLOBAL_ERROR: Not Found - /api/drs/698ac8b01587e01651a49443/by-vehicle?vehicleNumber=RJ27TB0160&date=2026-09-18 - Stack: Error: Not Found - /api/drs/698ac8b01587e01651a49443/by-vehicle?vehicleNumber=RJ27TB0160&date=2026-09-18
+    at notFound (E:\New folder\Master-Server\TEXI\yatree-backend\src\middleware\errorMiddleware.js:2:19)
+    at Layer.handle [as handle_request] (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\layer.js:95:5)
+    at trim_prefix (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\index.js:328:13)
+    at E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\index.js:286:9
+    at Function.process_params (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\index.js:346:12)
+    at next (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\index.js:280:10)
+    at next (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\route.js:141:14)
+    at E:\New folder\Master-Server\TEXI\yatree-backend\src\app.js:139:16
+    at Layer.handle [as handle_request] (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\layer.js:95:5)
+    at next (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\express\lib\router\route.js:149:13)
+[2026-09-18T08:50:02.116Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-18T09:07:48.685Z] Login attempt started
+[2026-09-18T09:07:48.687Z] Login request for: Kavishuser1
+[2026-09-18T09:07:48.816Z] User found: Yatree (Role: Admin)
+[2026-09-18T09:07:48.910Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-09-18T09:07:48.911Z] Password matched
+[2026-09-18T09:07:48.911Z] DEBUG: Company status in DB is: "active" (Normalized: "active")

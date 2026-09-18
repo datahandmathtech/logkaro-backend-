@@ -22,14 +22,23 @@ const getDRSDuties = asyncHandler(async (req, res) => {
         };
     } else if (date && date !== 'all') {
         const dateStr = typeof date === 'string' ? date.split('T')[0] : new Date(date).toISOString().split('T')[0];
+        
+        // Match ANY time on this calendar date by scanning from UTC midnight to UTC 23:59
+        // This avoids missing records if they were saved in local time vs UTC
         const [y, m, d] = dateStr.split('-').map(Number);
+        
+        // Broaden the search window to cover both UTC and IST bounds for the given date string
+        // Start: Previous day 18:30 UTC (which is Midnight IST)
+        // End: Current day 23:59 UTC (which is next day 05:29 IST)
         const startOfDay = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
-        const istStart = new Date(startOfDay.getTime() - (5.5 * 60 * 60 * 1000));
-        const istEnd = new Date(startOfDay.getTime() + (23.99 * 60 * 60 * 1000));
+        
+        // We will fetch from (Date - 1 day) 18:30:00 to (Date) 23:59:59 UTC to ensure we catch anything falling on this date locally
+        const fetchStart = new Date(startOfDay.getTime() - (6 * 60 * 60 * 1000)); // 18:00 UTC previous day
+        const fetchEnd = new Date(startOfDay.getTime() + (24 * 60 * 60 * 1000)); // 24:00 UTC current day
 
         query.date = {
-            $gte: istStart,
-            $lte: istEnd
+            $gte: fetchStart,
+            $lte: fetchEnd
         };
     }
 
