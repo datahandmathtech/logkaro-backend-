@@ -51,10 +51,13 @@ const getBookings = asyncHandler(async (req, res) => {
         if (b.bookingStatus === 'Confirmed' || b.bookingStatus === 'Ongoing') {
             let shouldComplete = false;
             
+            
             // Check 1: Balance is 0
-            if (b.balanceDue <= 0 && b.advancePaid > 0) {
+            const actualBalance = (b.packagePrice || 0) - (b.advancePaid || 0);
+            if (actualBalance <= 0 && b.advancePaid > 0) {
                 shouldComplete = true;
             }
+
             
             // Check 2: Date has passed
             const endDate = b.travelEndDate ? new Date(b.travelEndDate) : null;
@@ -251,12 +254,16 @@ const cancelBooking = asyncHandler(async (req, res) => {
         throw new Error('Booking not found');
     }
     
+    
     const advancePaid = booking.advancePaid || 0;
     const refund = Number(refundAmount) || 0;
     
     // Process refund logic
     if (refund > 0) {
-        const LedgerEntry = require('../models/LedgerEntry'); // ensure it's required
+        const LedgerEntry = require('../models/LedgerEntry');
+        const BankAccount = require('../models/BankAccount');
+        const BankTransaction = require('../models/BankTransaction');
+
         await LedgerEntry.create({
             client: booking.client,
             company: booking.company,
@@ -266,8 +273,39 @@ const cancelBooking = asyncHandler(async (req, res) => {
             referenceId: booking._id,
             date: new Date()
         });
+
+        if (refundMode === 'Bank') {
+            try {
+                let bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
+                    || await BankAccount.findOne({ company: booking.company });
+                
+                if (bank) {
+                    await BankTransaction.create({
+                        company: booking.company,
+                        bankAccount: bank._id,
+                        bankName: bank.bankName || '',
+                        type: 'OUT',
+                        amount: refund,
+                        paymentMode: 'Bank Transfer / NEFT',
+                        category: 'Refund',
+                        reference: '',
+                        description: `Refund Issued - ${booking.clientName}`,
+                        bookingRef: booking._id,
+                        clientRef: booking.client || null,
+                        date: new Date(),
+                        createdBy: req.user ? req.user._id : null
+                    });
+                    bank.currentBalance = (bank.currentBalance || 0) - refund;
+                    await bank.save();
+                }
+            } catch (bankErr) {
+                console.error('Error creating bank transaction on refund:', bankErr);
+            }
+        }
+        
         booking.advancePaid -= refund; // Retained amount
     }
+
 
     const retainedAmount = advancePaid - refund;
     
