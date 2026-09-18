@@ -160,7 +160,7 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
                 paymentMode: paymentMode || 'Bank Transfer / NEFT',
                 category: 'Booking Payment',
                 reference: paymentReference || '',
-                description: `Payment received for Booking ${booking.bookingId} (${booking.clientCode || ''}) - ${booking.clientName}`,
+                description: `Payment Received - ${booking.clientName}`,
                 bookingRef: booking._id,
                 clientRef: booking.client || null,
                 date: new Date(),

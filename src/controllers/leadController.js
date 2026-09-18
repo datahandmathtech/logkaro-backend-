@@ -393,7 +393,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
                 paymentMode: paymentMode || 'UPI / QR Code',
                 reference: paymentReference || '',
                 paymentScreenshot: paymentScreenshot || '',
-                description: `Advance for Booking ${bookingId} (${lead.clientCode || lead.leadId}) - ${lead.clientName}`,
+                description: `Advance Payment Received - ${lead.clientName}`,
                 leadRef: lead._id,
                 clientRef: client._id,
                 date: new Date(),
