@@ -3147,13 +3147,17 @@ const getMaintenanceRecords = asyncHandler(async (req, res) => {
             }
         });
     });
-    let combined = [...mainRecords, ...mappedParking];
+    let combined = [];
 
     if (requestType === 'driver_services') {
-        combined = combined.filter(r => {
+        const driverServiceRecords = mainRecords.filter(r => {
             const cat = String(r.category || '').toLowerCase();
             const desc = String(r.description || '').toLowerCase();
             const mType = String(r.maintenanceType || '').toLowerCase();
+            const source = String(r.source || '').toLowerCase();
+
+            if (source === 'driver app' || source === 'driver') return true;
+            if (mType === 'driver services' || mType === 'driver service') return true;
 
             // Operational services: Wash, Puncture, Tissue, Water
             const isWash = cat.includes('wash') || desc.includes('wash');
@@ -3164,25 +3168,34 @@ const getMaintenanceRecords = asyncHandler(async (req, res) => {
 
             // Catch anything explicitly marked as an operational service, 
             // BUT EXCLUDE mechanical repairs (even if they use the word 'service' like 'Periodic Service')
-            const isExplicitService = mType.includes('service');
-            const isMechanical = /oil|fan|engine|brake|clutch|gear|mechanical|electrical|suspension|tyre|tire|battery|coolant|labour|labor|parts/i.test(cat) ||
-                /oil|fan|engine|brake|clutch|gear|mechanical|electrical|suspension|tyre|tire|battery|coolant|labour|labor|parts/i.test(desc);
+            const isExplicitService = mType.includes('service') && !mType.includes('regular') && !mType.includes('fleet');
+            const isMechanical = /oil|fan|engine|brake|clutch|gear|mechanical|electrical|suspension|tyre|tire|battery|coolant|labour|labor|parts|ac /i.test(cat) ||
+                /oil|fan|engine|brake|clutch|gear|mechanical|electrical|suspension|tyre|tire|battery|coolant|labour|labor|parts|ac /i.test(desc);
 
             return isWash || isPuncture || isTissue || isWater || (isExplicitService && !isMechanical);
         });
+
+        combined = [...driverServiceRecords, ...mappedParking, ...mappedPending];
     } else {
-        // Exclude driver services from the main maintenance view
-        combined = combined.filter(r => {
+        // Exclude ALL driver services, driver app entries, parking, and operational driver items from workshop maintenance
+        combined = mainRecords.filter(r => {
             const cat = String(r.category || '').toLowerCase();
             const desc = String(r.description || '').toLowerCase();
+            const mType = String(r.maintenanceType || '').toLowerCase();
+            const source = String(r.source || '').toLowerCase();
+
+            if (source === 'driver app' || source === 'driver') return false;
+            if (mType === 'driver services' || mType === 'driver service') return false;
 
             const isWash = cat.includes('wash') || desc.includes('wash');
             const isPuncture = cat.includes('punc') || desc.includes('punc');
             const isTissue = cat.includes('tissue') || desc.includes('tissue');
-            const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('pump')) ||
-                (desc.includes('water') && !desc.includes('repair') && !desc.includes('pump'));
+            const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('pump') && !cat.includes('coolant')) ||
+                (desc.includes('water') && !desc.includes('repair') && !desc.includes('pump') && !desc.includes('coolant'));
+            const isDriverCleaning = cat.includes('cleaning supplies') || desc.includes('cleaning supplies');
 
-            return !(isWash || isPuncture || isTissue || isWater);
+            if (isWash || isPuncture || isTissue || isWater || isDriverCleaning) return false;
+            return true;
         });
     }
 
