@@ -28,8 +28,13 @@ const logError = (msg) => {
 const loginUser = async (req, res) => {
     try {
         logError('Login attempt started');
-        const { mobile, password } = req.body;
-        logError(`Login request for: ${mobile}`);
+        const { mobile, username, password } = req.body;
+        const loginIdentifier = (mobile || username || '').trim();
+        logError(`Login request for: ${loginIdentifier}`);
+
+        if (!loginIdentifier) {
+            return res.status(400).json({ message: 'Mobile or Username is required' });
+        }
 
         const jwtSecret = process.env.JWT_SECRET || 'fleet_crm_secure_fallback_2024';
 
@@ -67,21 +72,22 @@ const loginUser = async (req, res) => {
         }
 
         // Try to find user by mobile OR exact username (case-insensitive where possible)
+        const escapedId = loginIdentifier.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
         let user = await User.findOne({
             $or: [
-                { mobile: mobile.trim() },
-                { username: { $regex: new RegExp(`^${mobile.trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}$`, 'i') } },
-                { username: mobile.trim() } // Direct fallback match
+                { mobile: loginIdentifier },
+                { username: { $regex: new RegExp(`^${escapedId}$`, 'i') } },
+                { username: loginIdentifier } // Direct fallback match
             ],
             isFreelancer: { $ne: true }
         }).populate('company');
 
         if (!user) {
-            logError(`Login failed: User [${mobile}] not found in standard lookup.`);
+            logError(`Login failed: User [${loginIdentifier}] not found in standard lookup.`);
             // Direct fallback exact match again just in case
-            user = await User.findOne({ username: mobile }).populate('company');
+            user = await User.findOne({ username: loginIdentifier }).populate('company');
             if (user && user.isFreelancer !== true) {
-                logError(`WARNING: Fallback match worked for [${mobile}]. Fixing auth flow.`);
+                logError(`WARNING: Fallback match worked for [${loginIdentifier}]. Fixing auth flow.`);
             } else {
                 return res.status(401).json({ message: 'Invalid mobile or password' });
             }

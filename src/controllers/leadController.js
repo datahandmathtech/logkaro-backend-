@@ -43,7 +43,9 @@ const getLeads = asyncHandler(async (req, res) => {
             { mobileNumber: { $regex: search, $options: 'i' } },
             { leadId: { $regex: search, $options: 'i' } },
             { clientCode: { $regex: search, $options: 'i' } },
-            { source: { $regex: search, $options: 'i' } }
+            { source: { $regex: search, $options: 'i' } },
+            { travelAgentName: { $regex: search, $options: 'i' } },
+            { travelAgentMobile: { $regex: search, $options: 'i' } }
         ];
     }
 

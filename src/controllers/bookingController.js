@@ -2,6 +2,8 @@ const Booking = require('../models/Booking');
 const DRSDuty = require('../models/DRSDuty');
 const Client = require('../models/Client');
 const LedgerEntry = require('../models/LedgerEntry');
+const BankAccount = require('../models/BankAccount');
+const BankTransaction = require('../models/BankTransaction');
 const asyncHandler = require('express-async-handler');
 
 // @desc    Get all bookings for a company with filters
@@ -133,12 +135,46 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
         company: booking.company,
         type: 'Payment',
         amount: paymentAmount,
-        description: `Payment received for ${booking.bookingId} via ${paymentMode || 'Cash'} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
+        description: `Payment received for ${booking.bookingId} (${booking.clientCode || ''}) via ${paymentMode || 'Cash'} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
         referenceId: booking._id
     });
 
+    // Create Bank Transaction & Update Bank Account Balance
+    try {
+        let bank = null;
+        if (req.body.bankAccountId) {
+            bank = await BankAccount.findById(req.body.bankAccountId);
+        }
+        if (!bank) {
+            bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
+                || await BankAccount.findOne({ company: booking.company });
+        }
+
+        if (bank) {
+            await BankTransaction.create({
+                company: booking.company,
+                bankAccount: bank._id,
+                bankName: bank.bankName || '',
+                type: 'IN',
+                amount: paymentAmount,
+                paymentMode: paymentMode || 'Bank Transfer / NEFT',
+                category: 'Booking Payment',
+                reference: paymentReference || '',
+                description: `Payment received for Booking ${booking.bookingId} (${booking.clientCode || ''}) - ${booking.clientName}`,
+                bookingRef: booking._id,
+                clientRef: booking.client || null,
+                date: new Date(),
+                createdBy: req.user ? req.user._id : null
+            });
+            bank.currentBalance = (bank.currentBalance || 0) + paymentAmount;
+            await bank.save();
+        }
+    } catch (bankErr) {
+        console.error('Error creating bank transaction on booking payment:', bankErr);
+    }
+
     res.json({
-        message: 'Payment recorded successfully',
+        message: 'Payment recorded successfully and synced to Bank Book',
         booking
     });
 });
