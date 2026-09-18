@@ -178,9 +178,66 @@ const deleteDRSDuty = asyncHandler(async (req, res) => {
     res.json({ message: 'Duty removed' });
 });
 
+// @desc    Get DRS duties by vehicle number and date (for Fuel guest auto-fetch)
+// @route   GET /api/drs/:companyId/by-vehicle
+// @access  Private/AdminOrExecutive
+const getDRSDutiesByVehicle = asyncHandler(async (req, res) => {
+    const { vehicleNumber, date } = req.query;
+
+    if (!vehicleNumber || !date) {
+        res.status(400);
+        throw new Error('vehicleNumber and date are required');
+    }
+
+    // Build date range for the specific day (IST-aware)
+    const dateStr = typeof date === 'string' ? date.split('T')[0] : new Date(date).toISOString().split('T')[0];
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const startOfDay = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+    const istStart = new Date(startOfDay.getTime() - (5.5 * 60 * 60 * 1000));
+    const istEnd = new Date(startOfDay.getTime() + (23.99 * 60 * 60 * 1000));
+
+    // Clean vehicle number for regex matching (remove spaces, dashes)
+    const cleanNumber = vehicleNumber.replace(/[\s\-]/g, '').toUpperCase();
+
+    // First, try to find a Vehicle document matching this car number
+    const Vehicle = require('../models/Vehicle');
+    const matchingVehicle = await Vehicle.findOne({
+        company: req.params.companyId,
+        carNumber: { $regex: cleanNumber, $options: 'i' }
+    });
+
+    // Build query: match by customCarNumber string OR vehicle ObjectId
+    let vehicleQuery;
+    if (matchingVehicle) {
+        vehicleQuery = {
+            $or: [
+                { customCarNumber: { $regex: cleanNumber, $options: 'i' } },
+                { vehicle: matchingVehicle._id }
+            ]
+        };
+    } else {
+        vehicleQuery = { customCarNumber: { $regex: cleanNumber, $options: 'i' } };
+    }
+
+    const duties = await DRSDuty.find({
+        company: req.params.companyId,
+        date: { $gte: istStart, $lte: istEnd },
+        ...vehicleQuery,
+        status: { $nin: ['Cancelled', 'No-show'] }
+    })
+        .populate('driver', 'name mobile')
+        .populate('vehicle', 'carNumber model type brand')
+        .populate('leadId', 'clientName leadId status totalAmount')
+        .populate('bookingRef', 'bookingId clientName totalAmount advancePaid balanceDue bookingStatus')
+        .sort({ time: 1 });
+
+    res.json(duties);
+});
+
 module.exports = {
     getDRSDuties,
     createDRSDuty,
     updateDRSDuty,
-    deleteDRSDuty
+    deleteDRSDuty,
+    getDRSDutiesByVehicle
 };
