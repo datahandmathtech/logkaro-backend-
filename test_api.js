@@ -1,1 +1,34 @@
-const jwt = require('jsonwebtoken'); const token = jwt.sign({ id: '69cb9bf871ac31c51c9e7d93', role: 'SuperAdmin', company: '698ac8b01587e01651a49443' }, 'yatree_secure_key_2024'); const axios = require('axios'); axios.get('http://localhost:5005/api/admin/drivers/698ac8b01587e01651a49443?usePagination=false&status=active', {headers:{'Authorization':'Bearer ' + token}}).then(r => console.log('DRIVERS:', r.data.drivers.length, r.data.drivers.map(d=>d.name).slice(0,5))).catch(e => console.log(e.response?.status, e.response?.data));
+const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
+require('dotenv').config();
+
+mongoose.connect(process.env.MONGODB_URI).then(async () => {
+    const User = require('./src/models/User');
+    const user = await User.findOne({ name: 'Yatree' }); 
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    
+    const http = require('http');
+    const req = http.request({
+        hostname: '127.0.0.1',
+        port: 5005,
+        path: '/api/bookings/' + user.company,
+        method: 'GET',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    }, res => {
+        let body = '';
+        res.on('data', d => body += d);
+        res.on('end', () => {
+            console.log('API Status:', res.statusCode);
+            const data = JSON.parse(body);
+            console.log('Returned items:', Array.isArray(data) ? data.length : 'not an array');
+            if (Array.isArray(data) && data.length > 0) {
+                const conf = data.filter(d => d.bookingStatus === 'Confirmed');
+                console.log('Confirmed in array:', conf.length);
+            }
+            process.exit(0);
+        });
+    });
+    req.end();
+});
