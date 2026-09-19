@@ -941,3 +941,72 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-09-19T10:19:21.908Z] Login request for: Test100
 [2026-09-19T10:19:22.026Z] Login failed: User [Test100] not found in standard lookup.
 [2026-09-19T10:19:22.051Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T10:52:57.333Z] CRON: Cron Jobs Initialized
+[2026-09-19T10:53:25.507Z] Login attempt started
+[2026-09-19T10:53:25.508Z] Login request for: Test100
+[2026-09-19T10:53:25.540Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T10:53:25.561Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T10:55:03.345Z] Login attempt started
+[2026-09-19T10:55:03.346Z] Login request for: Test100
+[2026-09-19T10:55:03.377Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T10:55:03.439Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T10:55:30.407Z] Login attempt started
+[2026-09-19T10:55:30.408Z] Login request for: Test200
+[2026-09-19T10:55:30.437Z] Login failed: User [Test200] not found in standard lookup.
+[2026-09-19T10:55:30.465Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T10:56:33.481Z] Login attempt started
+[2026-09-19T10:56:33.482Z] Login request for: Test100
+[2026-09-19T10:56:33.509Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T10:56:33.530Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T10:56:41.264Z] Login attempt started
+[2026-09-19T10:56:41.265Z] Login request for: Test100
+[2026-09-19T10:56:41.294Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T10:56:41.316Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T10:56:58.895Z] Login attempt started
+[2026-09-19T10:56:58.896Z] Login request for: Test100
+[2026-09-19T10:56:58.947Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T10:56:58.973Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T11:01:05.678Z] Login attempt started
+[2026-09-19T11:01:05.679Z] Login request for: Test100
+[2026-09-19T11:01:06.350Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T11:01:06.371Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T11:01:26.259Z] Login attempt started
+[2026-09-19T11:01:26.260Z] Login request for: Kavishuser1
+[2026-09-19T11:01:26.327Z] User found: Yatree (Role: Admin)
+[2026-09-19T11:01:26.521Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=false
+[2026-09-19T11:01:26.521Z] Invalid credentials
+[2026-09-19T11:01:34.882Z] Login attempt started
+[2026-09-19T11:01:34.883Z] Login request for: Kavishuser1
+[2026-09-19T11:01:34.933Z] User found: Yatree (Role: Admin)
+[2026-09-19T11:01:35.123Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=false
+[2026-09-19T11:01:35.124Z] Invalid credentials
+[2026-09-19T11:01:46.366Z] Login attempt started
+[2026-09-19T11:01:46.367Z] Login request for: Test200
+[2026-09-19T11:01:46.388Z] Login failed: User [Test200] not found in standard lookup.
+[2026-09-19T11:01:46.409Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T11:02:25.680Z] Login attempt started
+[2026-09-19T11:02:25.681Z] Login request for: Test200
+[2026-09-19T11:02:25.750Z] Login failed: User [Test200] not found in standard lookup.
+[2026-09-19T11:02:25.810Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-09-19T11:08:02.955Z] Login attempt started
+[2026-09-19T11:08:02.956Z] Login request for: Kavishuser1
+[2026-09-19T11:08:03.131Z] User found: Yatree (Role: Admin)
+[2026-09-19T11:08:03.324Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-09-19T11:08:03.325Z] Password matched
+[2026-09-19T11:08:03.326Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-09-19T11:08:08.035Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:16.488Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:18.030Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:18.266Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:26.507Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:30.794Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:31.131Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:35.785Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:37.731Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:37.743Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-09-19T11:08:37.924Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-09-19T11:08:38.950Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-09-19T11:09:29.922Z] Login attempt started
+[2026-09-19T11:09:29.923Z] Login request for: Test100
+[2026-09-19T11:09:29.954Z] Login failed: User [Test100] not found in standard lookup.
+[2026-09-19T11:09:30.057Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
