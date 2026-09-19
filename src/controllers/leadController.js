@@ -298,7 +298,10 @@ const convertToBooking = asyncHandler(async (req, res) => {
     }
 
     // 1. Generate unique sequential Booking ID (e.g. LK-BKG-2026-00001)
-    const bookingId = await getNextSequence('LK-BKG');
+    let bookingId = lead.clientCode;
+    if (!bookingId) {
+        bookingId = await getNextSequence('LK-BKG');
+    }
 
     // 2. Determine GST breakdown based on GST mode and lead/company settings
     const companyData = await Company.findById(lead.company);
@@ -483,6 +486,8 @@ const convertToBooking = asyncHandler(async (req, res) => {
         itinerary: lead.itinerary,
         totalAmount: grandTotal,
         advancePaid: advance, advanceDate: advancePaymentDate || new Date(),
+        paymentMode: paymentMode || 'UPI / QR Code',
+        paymentReference: paymentReference || '',
         balanceDue: balanceDue,
         gstMode: lead.gstMode,
         gstRate,

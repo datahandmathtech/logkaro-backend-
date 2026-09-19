@@ -39,7 +39,7 @@ const getBookings = asyncHandler(async (req, res) => {
 
     
     const bookings = await Booking.find(query)
-        .populate('lead', 'leadId status totalAmount')
+        .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks')
         .populate('client', 'name mobile balance')
         .sort({ createdAt: -1 });
 
@@ -54,9 +54,14 @@ const getBookings = asyncHandler(async (req, res) => {
             
             // Check 1: Balance is 0
             const actualBalance = (b.packagePrice || b.totalAmount || 0) - (b.advancePaid || 0);
-            if (actualBalance <= 0 && b.advancePaid > 0) {
-                shouldComplete = true;
-            }
+              console.log('--- AUTO-COMPLETE DEBUG ---');
+              console.log('Booking:', b._id, 'Status:', b.bookingStatus);
+              console.log('pkg:', b.packagePrice, 'tot:', b.totalAmount, 'adv:', b.advancePaid);
+              console.log('actualBalance:', actualBalance);
+              if (actualBalance <= 0 && b.advancePaid > 0) {
+                  console.log('=> completing due to balance');
+                  shouldComplete = true;
+              }
 
             
             // Check 2: Date has passed
