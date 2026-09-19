@@ -7,7 +7,8 @@ const {
     deleteBankAccount,
     getBankTransactions,
     addBankTransaction,
-    deleteBankTransaction
+    deleteBankTransaction,
+    updateBankTransaction
 } = require('../controllers/bankController');
 const { protect, adminOrExecutive } = require('../middleware/authMiddleware');
 
@@ -30,6 +31,7 @@ router.route('/transactions')
     .post(adminOrExecutive, addBankTransaction);
 
 router.route('/transactions/:id')
+    .put(adminOrExecutive, updateBankTransaction)
     .delete(adminOrExecutive, deleteBankTransaction);
 
 module.exports = router;

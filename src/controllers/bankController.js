@@ -194,6 +194,64 @@ const addBankTransaction = asyncHandler(async (req, res) => {
     res.status(201).json({ transaction: tx, bankBalance: bank.currentBalance });
 });
 
+
+// @desc    Update a bank transaction
+// @route   PUT /api/banks/transactions/:id
+// @access  Private/Admin
+const updateBankTransaction = asyncHandler(async (req, res) => {
+    const { amount, date, description, category, paymentMode, reference } = req.body;
+    
+    const tx = await BankTransaction.findById(req.params.id);
+    if (!tx) {
+        res.status(404);
+        throw new Error('Transaction not found');
+    }
+
+    const newAmount = Number(amount);
+    const oldAmount = tx.amount;
+    const diff = newAmount - oldAmount;
+
+    // Update bank balance
+    if (diff !== 0) {
+        const bank = await BankAccount.findById(tx.bankAccount);
+        if (bank) {
+            if (tx.type === 'IN') {
+                bank.currentBalance += diff;
+            } else {
+                bank.currentBalance -= diff;
+            }
+            await bank.save();
+        }
+    }
+
+    // Update Booking advancePaid if linked
+    if (diff !== 0 && tx.bookingRef) {
+        const Booking = require('../models/Booking');
+        const booking = await Booking.findById(tx.bookingRef);
+        if (booking) {
+            if (tx.type === 'IN') {
+                booking.advancePaid = Math.max(0, (booking.advancePaid || 0) + diff);
+            } else {
+                booking.advancePaid = (booking.advancePaid || 0) - diff;
+            }
+            booking.notes = (booking.notes || '') + `\n[System]: Payment edited in Bank Book from ${oldAmount} to ${newAmount} on ${new Date().toLocaleDateString()}.`;
+            await booking.save();
+        }
+    }
+
+    // Update transaction fields
+    tx.amount = newAmount;
+    if (date) tx.date = date;
+    if (description !== undefined) tx.description = description;
+    if (category !== undefined) tx.category = category;
+    if (paymentMode !== undefined) tx.paymentMode = paymentMode;
+    if (reference !== undefined) tx.reference = reference;
+    
+    await tx.save();
+
+    res.json(tx);
+});
+
 // @desc    Delete a bank transaction
 // @route   DELETE /api/banks/transactions/:id
 // @access  Private/Admin
@@ -214,19 +272,42 @@ const deleteBankTransaction = asyncHandler(async (req, res) => {
         await bank.save();
     }
 
-    // If transaction is linked to a booking, reverse the advancePaid
+    // Handle revert booking logic
     if (tx.bookingRef) {
         const Booking = require('../models/Booking');
         const booking = await Booking.findById(tx.bookingRef);
+        
         if (booking) {
-            if (tx.type === 'IN') {
-                booking.advancePaid = Math.max(0, (booking.advancePaid || 0) - tx.amount);
+            if (req.query.revertBooking === 'true') {
+                // REVERT BOOKING TO LEAD
+                const Lead = require('../models/Lead');
+                if (booking.lead) {
+                    const lead = await Lead.findById(booking.lead);
+                    if (lead) {
+                        lead.status = 'Open';
+                        lead.advancePayment = 0;
+                        lead.bookingRef = null;
+                        lead.bookingId = '';
+                        await lead.save();
+                    }
+                }
+                
+                // Unlink DRSDuties
+                const DRSDuty = require('../models/DRSDuty');
+                await DRSDuty.updateMany({ bookingRef: booking._id }, { bookingRef: null, status: 'Pending' });
+                
+                // Delete the booking itself
+                await booking.deleteOne();
             } else {
-                booking.advancePaid = (booking.advancePaid || 0) + tx.amount;
+                // JUST REMOVE PAYMENT FROM BOOKING
+                if (tx.type === 'IN') {
+                    booking.advancePaid = Math.max(0, (booking.advancePaid || 0) - tx.amount);
+                } else {
+                    booking.advancePaid = (booking.advancePaid || 0) + tx.amount;
+                }
+                booking.notes = (booking.notes || '') + `\n[System]: Payment of ${tx.amount} deleted from Bank Book on ${new Date().toLocaleDateString()}.`;
+                await booking.save();
             }
-            // Add a note about deleted transaction
-            booking.notes = (booking.notes || '') + `\n[System]: Payment of ${tx.amount} deleted from Bank Book on ${new Date().toLocaleDateString()}.`;
-            await booking.save();
         }
     }
 
@@ -241,5 +322,6 @@ module.exports = {
     deleteBankAccount,
     getBankTransactions,
     addBankTransaction,
-    deleteBankTransaction
+    deleteBankTransaction,
+    updateBankTransaction
 };
