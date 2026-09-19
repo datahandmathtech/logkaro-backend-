@@ -95,7 +95,7 @@ const loginUser = async (req, res) => {
                 // 1. Check School Management CRM
                 if (process.env.MONGODB_URI_SCHOOL) {
                     try {
-                        const schoolConn = await mongoose.createConnection(process.env.MONGODB_URI_SCHOOL).asPromise();
+                        const schoolConn = await mongoose.createConnection(process.env.MONGODB_URI_SCHOOL, { serverSelectionTimeoutMS: 5000 }).asPromise();
                         const SchoolUser = schoolConn.model('User', User.schema, 'users');
                         const schoolUser = await SchoolUser.findOne({
                             $or: [{ mobile: loginIdentifier }, { username: loginIdentifier }]
@@ -124,7 +124,7 @@ const loginUser = async (req, res) => {
                 // 2. Check Modified Fleet CRM
                 if (process.env.MONGODB_URI_MODIFIED_FLEET) {
                     try {
-                        const modConn = await mongoose.createConnection(process.env.MONGODB_URI_MODIFIED_FLEET).asPromise();
+                        const modConn = await mongoose.createConnection(process.env.MONGODB_URI_MODIFIED_FLEET, { serverSelectionTimeoutMS: 5000 }).asPromise();
                         const ModUser = modConn.model('User', User.schema, 'users');
                         const modUser = await ModUser.findOne({
                             $or: [{ mobile: loginIdentifier }, { username: loginIdentifier }]
