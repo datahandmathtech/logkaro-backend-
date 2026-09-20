@@ -284,7 +284,7 @@ const deleteBankTransaction = asyncHandler(async (req, res) => {
                 if (booking.lead) {
                     const lead = await Lead.findById(booking.lead);
                     if (lead) {
-                        lead.status = 'Open';
+                        lead.status = 'New';
                         lead.advancePayment = 0;
                         lead.bookingRef = null;
                         lead.bookingId = '';
