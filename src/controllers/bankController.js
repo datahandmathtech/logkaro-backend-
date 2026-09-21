@@ -256,7 +256,9 @@ const updateBankTransaction = asyncHandler(async (req, res) => {
 // @route   DELETE /api/banks/transactions/:id
 // @access  Private/Admin
 const deleteBankTransaction = asyncHandler(async (req, res) => {
+    console.log("DELETE TRANSACTION HIT WITH ID:", req.params.id);
     const tx = await BankTransaction.findById(req.params.id);
+    console.log("TRANSACTION FOUND?", !!tx);
     if (!tx) {
         res.status(404);
         throw new Error('Transaction not found');
