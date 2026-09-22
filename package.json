@@ -1,0 +1,16 @@
+{
+  "name": "logkaro-master-workspace",
+  "version": "1.0.0",
+  "description": "Unified startup script for all LogKaro microservices",
+  "scripts": {
+    "start": "concurrently \"npm run backend:main\" \"npm run frontend:main\" \"npm run proxy\" \"npm run backend:sa\" \"npm run frontend:sa\"",
+    "backend:main": "cd \"E:\\New folder\\Master-Server\\TEXI\\yatree-backend\" && npm run dev",
+    "frontend:main": "cd \"E:\\New folder\\Master-Server\\TEXI\\yatree-frontend-\" && npm run dev",
+    "proxy": "cd \"E:\\New folder\\Master-Server\\TEXI\\local-proxy\" && node server.js",
+    "backend:sa": "cd /d \"D:\\TEXI\\super-admin\\backend\" && npm run dev",
+    "frontend:sa": "cd /d \"D:\\TEXI\\super-admin\\client\" && npm run dev"
+  },
+  "dependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
