@@ -37,7 +37,6 @@ const advanceSchema = new mongoose.Schema({
     },
     advanceType: {
         type: String,
-        enum: ['Office', 'Staff', 'Other'],
         default: 'Office'
     },
     staff: {
@@ -57,6 +56,30 @@ const advanceSchema = new mongoose.Schema({
     givenBy: {
         type: String,
         default: 'Office'
+    },
+    paidBy: {
+        type: String,
+        default: 'Company'
+    },
+    bankAccount: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankAccount'
+    },
+    booking: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Booking'
+    },
+    bookingId: {
+        type: String
+    },
+    guestName: {
+        type: String
+    },
+    paymentMode: {
+        type: String
+    },
+    paymentReference: {
+        type: String
     }
 }, { timestamps: true });
 

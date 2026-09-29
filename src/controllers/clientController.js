@@ -1,7 +1,10 @@
 const Client = require('../models/Client');
 const LedgerEntry = require('../models/LedgerEntry');
-const asyncHandler = require('express-async-handler');
+const BankAccount = require('../models/BankAccount');
+const BankTransaction = require('../models/BankTransaction');
+const CashTransaction = require('../models/CashTransaction');
 const Company = require('../models/Company');
+const asyncHandler = require('express-async-handler');
 
 const mongoose = require('mongoose');
 
@@ -73,7 +76,7 @@ const getClients = asyncHandler(async (req, res) => {
                     },
                     fyPaid: {
                         $sum: {
-                            $cond: [{ $in: ['$type', ['Payment', 'Advance']] }, '$amount', 0]
+                            $cond: [{ $in: ['$type', ['Payment', 'Advance', 'Fuel']] }, '$amount', 0]
                         }
                     },
                     fyTripsCount: {
@@ -211,7 +214,8 @@ const getClientLedger = asyncHandler(async (req, res) => {
 // @route   POST /api/clients/:id/payment
 // @access  Private/Admin
 const addPayment = asyncHandler(async (req, res) => {
-    const { amount, description, date } = req.body;
+    const { amount, description, date, paymentMode, bankAccountId, reference } = req.body;
+    const numAmount = Number(amount);
     
     const client = await Client.findById(req.params.id);
     if (!client) {
@@ -219,18 +223,87 @@ const addPayment = asyncHandler(async (req, res) => {
         throw new Error('Client not found');
     }
 
-    client.totalPaid += Number(amount);
-    client.balance -= Number(amount);
+    client.totalPaid += numAmount;
+    client.balance -= numAmount;
     await client.save();
 
     const entry = await LedgerEntry.create({
         client: client._id,
         company: client.company,
         type: 'Payment',
-        amount: Number(amount),
-        description: description || 'Manual Payment Received',
+        amount: numAmount,
+        description: description || `Manual Payment Received via ${paymentMode || 'Cash'}`,
         date: date || Date.now()
     });
+
+    // Sync to Cash Book or Bank Book
+    if (numAmount > 0) {
+        const isCash = (
+            paymentMode === 'Cash' ||
+            paymentMode === 'Driver Cash' ||
+            paymentMode === 'Cash to Company' ||
+            (paymentMode && paymentMode.toLowerCase().includes('cash')) ||
+            !paymentMode
+        );
+
+        if (isCash) {
+            try {
+                await CashTransaction.create({
+                    company: client.company,
+                    type: 'IN',
+                    amount: numAmount,
+                    category: 'Client Payment',
+                    reference: reference || '',
+                    description: description || `Payment Received - ${client.agencyName || client.name}`,
+                    clientRef: client._id,
+                    guestName: client.agencyName || client.name,
+                    sourceId: entry._id,
+                    sourceType: 'ClientPayment',
+                    date: date || Date.now(),
+                    createdBy: req.user ? req.user._id : null
+                });
+                await Company.findByIdAndUpdate(client.company, {
+                    $inc: { cashBalance: numAmount }
+                });
+            } catch (cashErr) {
+                console.error('Error creating cash transaction for client payment:', cashErr);
+            }
+        } else {
+            try {
+                let bank = null;
+                if (bankAccountId) {
+                    bank = await BankAccount.findById(bankAccountId);
+                }
+                if (!bank) {
+                    bank = await BankAccount.findOne({ company: client.company, isDefault: true })
+                        || await BankAccount.findOne({ company: client.company });
+                }
+
+                if (bank) {
+                    await BankTransaction.create({
+                        company: client.company,
+                        bankAccount: bank._id,
+                        bankName: bank.bankName || '',
+                        type: 'IN',
+                        amount: numAmount,
+                        category: 'Client Payment',
+                        paymentMode: paymentMode || 'Bank Transfer / NEFT',
+                        reference: reference || '',
+                        description: description || `Payment Received - ${client.agencyName || client.name}`,
+                        clientRef: client._id,
+                        sourceId: entry._id,
+                        sourceType: 'ClientPayment',
+                        date: date || Date.now(),
+                        createdBy: req.user ? req.user._id : null
+                    });
+                    bank.currentBalance = (bank.currentBalance || 0) + numAmount;
+                    await bank.save();
+                }
+            } catch (bankErr) {
+                console.error('Error recording bank transaction for client payment:', bankErr);
+            }
+        }
+    }
 
     res.status(201).json({ message: 'Payment recorded', client, entry });
 });

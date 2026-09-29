@@ -47,6 +47,10 @@ const companySchema = new mongoose.Schema({
             'Website', 'Google Ads', 'Repeat Guest', 'Hotel', 'Referral',
             'Walk-in', 'B2B/Agent', 'Social Media', 'JustDial', 'Other'
         ]
+    },
+    cashBalance: {
+        type: Number,
+        default: 0
     }
 }, { timestamps: true });
 

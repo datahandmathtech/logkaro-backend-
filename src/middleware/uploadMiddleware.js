@@ -22,14 +22,14 @@ const upload = multer({
     storage: storage,
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
     fileFilter: function (req, file, cb) {
-        const filetypes = /jpeg|jpg|png/;
-        const mimetype = filetypes.test(file.mimetype);
+        const filetypes = /jpeg|jpg|png|webp|pdf|heic|heif/;
+        const mimetype = filetypes.test(file.mimetype) || file.mimetype === 'application/pdf';
         const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
 
-        if (mimetype && extname) {
+        if (mimetype || extname) {
             return cb(null, true);
         }
-        cb(new Error("Error: File upload only supports images!"));
+        cb(new Error("Error: File upload only supports images and PDFs!"));
     }
 });
 

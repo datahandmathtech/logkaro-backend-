@@ -7,7 +7,7 @@ const BankTransaction = require('../models/BankTransaction');
 // @access  Private
 const getBankAccounts = asyncHandler(async (req, res) => {
     const { companyId } = req.params;
-    const accounts = await BankAccount.find({ company: companyId, isActive: true }).sort({ createdAt: 1 });
+    const accounts = await BankAccount.find({ company: companyId, isActive: { $ne: false } }).sort({ createdAt: 1 });
     res.json(accounts);
 });
 

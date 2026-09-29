@@ -18,7 +18,20 @@ const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
 const Loan = require('../models/Loan');
 const Allowance = require('../models/Allowance');
+const DRSDuty = require('../models/DRSDuty');
+const BankAccount = require('../models/BankAccount');
+const BankTransaction = require('../models/BankTransaction');
+const CashTransaction = require('../models/CashTransaction');
+const Booking = require('../models/Booking');
+const Client = require('../models/Client');
+const LedgerEntry = require('../models/LedgerEntry');
 const { DateTime } = require('luxon');
+const {
+    isCashMode,
+    recordFinancialTransaction,
+    removeFinancialTransaction,
+    updateFinancialTransaction
+} = require('../services/transactionSyncService');
 
 // Helper to check granular permissions for Executives
 const hasModuleAccess = (user, moduleKey, subKey = null) => {
@@ -2100,25 +2113,99 @@ const approveNewTrip = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/border-tax
 // @access  Private/Admin
 const addBorderTax = asyncHandler(async (req, res) => {
-    const { vehicleId, driverId, borderName, amount, date, validTill, remarks, companyId } = req.body;
+    const { 
+        vehicleId, driverId, borderName, amount, date, validTill, remarks, companyId,
+        paidBy, paymentSource, bankAccountId, paymentMode, bookingId, bookingRef, guestName
+    } = req.body;
 
     if (!vehicleId || !borderName || !amount || !date || !companyId) {
         return res.status(400).json({ message: 'Please provide all required fields' });
     }
 
     const receiptPhoto = req.file ? req.file.path.replace(/\\/g, '/') : null;
+    const numAmount = Number(amount);
+    const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
 
     const entry = await BorderTax.create({
         company: companyId,
         vehicle: vehicleId,
         ...(driverId && driverId.trim() !== '' ? { driver: driverId } : {}),
         borderName,
-        amount: Number(amount),
+        amount: numAmount,
         date,
         validTill,
         remarks,
         receiptPhoto: receiptPhoto
     });
+
+    // 1. By Company Deduction (Cash vs Bank)
+    if (effectivePaidBy === 'Company') {
+        const veh = await Vehicle.findById(vehicleId);
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: entry._id,
+            sourceType: 'BorderTax',
+            amount: numAmount,
+            date: date || entry.date,
+            paymentMode,
+            bankAccountId: bankAccountId || null,
+            type: 'OUT',
+            category: 'Border Tax',
+            description: `Border Tax (${borderName}) for Vehicle ${veh?.carNumber || ''}`,
+            reference: borderName,
+            receiptPhoto: receiptPhoto || '',
+            user: req.user?._id,
+            paidBy: effectivePaidBy
+        });
+    }
+
+    // 2. By Guest Package Deduction
+    if (effectivePaidBy === 'Guest') {
+        try {
+            let booking = null;
+            if (bookingRef) {
+                booking = await Booking.findById(bookingRef).populate('client');
+            } else if (bookingId) {
+                booking = await Booking.findOne({
+                    company: companyId,
+                    $or: [{ bookingId: bookingId }, { clientCode: bookingId }]
+                }).populate('client');
+            }
+
+            if (booking) {
+                booking.advancePaid = (booking.advancePaid || 0) + numAmount;
+                booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid);
+                if (booking.balanceDue === 0 && booking.totalAmount > 0) {
+                    booking.paymentStatus = 'Full Received';
+                } else if (booking.advancePaid > 0) {
+                    booking.paymentStatus = 'Advance Received';
+                }
+                await booking.save();
+
+                let client = booking.client;
+                if (!client && booking.mobileNumber && booking.mobileNumber !== 'TBA') {
+                    client = await Client.findOne({ company: companyId, mobile: booking.mobileNumber });
+                }
+                if (client) {
+                    client.totalPaid = (client.totalPaid || 0) + numAmount;
+                    client.balance = Math.max(0, (client.totalBilled || 0) - client.totalPaid);
+                    await client.save();
+
+                    await LedgerEntry.create({
+                        client: client._id,
+                        company: companyId,
+                        type: 'Advance',
+                        amount: numAmount,
+                        date: date || new Date(),
+                        description: `Guest paid Border Tax (${borderName}) - Booking ${booking.bookingId}`,
+                        referenceId: entry._id
+                    });
+                }
+            }
+        } catch (gErr) {
+            console.error('Error deducting guest package for Border Tax:', gErr);
+        }
+    }
 
     res.status(201).json(entry);
 });
@@ -2161,7 +2248,10 @@ const getBorderTaxEntries = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/vehicles/:id/fastag-recharge
 // @access  Private/Admin
 const rechargeFastag = asyncHandler(async (req, res) => {
-    const { amount, method, remarks, date } = req.body;
+    const { 
+        amount, method, remarks, date, companyId,
+        paidBy, paymentSource, bankAccountId, bookingId, bookingRef, guestName
+    } = req.body;
     logToFile(`[RECHARGE_FASTAG] User: ${req.user?._id}, Role: ${req.user?.role}, Vehicle: ${req.params.id}, Amount: ${amount}`);
 
     if (req.user?.role === 'Executive' && !hasModuleAccess(req.user, 'fleetOperations')) {
@@ -2180,6 +2270,8 @@ const rechargeFastag = asyncHandler(async (req, res) => {
     }
 
     const rechargeAmount = Number(amount);
+    const compId = companyId || vehicle.company;
+    const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
 
     // Update balance and history
     let receiptUrl = '';
@@ -2197,6 +2289,75 @@ const rechargeFastag = asyncHandler(async (req, res) => {
     });
 
     await vehicle.save();
+
+    // 1. By Company Deduction (Cash vs Bank)
+    if (effectivePaidBy === 'Company') {
+        const savedEntry = vehicle.fastagHistory[vehicle.fastagHistory.length - 1];
+        await recordFinancialTransaction({
+            companyId: compId,
+            sourceId: savedEntry?._id || vehicle._id,
+            sourceType: 'Fastag',
+            amount: rechargeAmount,
+            date: date || new Date(),
+            paymentMode: method,
+            bankAccountId: bankAccountId || null,
+            type: 'OUT',
+            category: 'Fastag Recharge',
+            description: `Fastag Recharge for Vehicle ${vehicle.carNumber}`,
+            reference: remarks || '',
+            receiptPhoto: receiptUrl || '',
+            user: req.user?._id,
+            paidBy: effectivePaidBy
+        });
+    }
+
+    // 2. By Guest Package Deduction
+    if (effectivePaidBy === 'Guest') {
+        try {
+            let booking = null;
+            if (bookingRef) {
+                booking = await Booking.findById(bookingRef).populate('client');
+            } else if (bookingId) {
+                booking = await Booking.findOne({
+                    company: compId,
+                    $or: [{ bookingId: bookingId }, { clientCode: bookingId }]
+                }).populate('client');
+            }
+
+            if (booking) {
+                booking.advancePaid = (booking.advancePaid || 0) + rechargeAmount;
+                booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid);
+                if (booking.balanceDue === 0 && booking.totalAmount > 0) {
+                    booking.paymentStatus = 'Full Received';
+                } else if (booking.advancePaid > 0) {
+                    booking.paymentStatus = 'Advance Received';
+                }
+                await booking.save();
+
+                let client = booking.client;
+                if (!client && booking.mobileNumber && booking.mobileNumber !== 'TBA') {
+                    client = await Client.findOne({ company: compId, mobile: booking.mobileNumber });
+                }
+                if (client) {
+                    client.totalPaid = (client.totalPaid || 0) + rechargeAmount;
+                    client.balance = Math.max(0, (client.totalBilled || 0) - client.totalPaid);
+                    await client.save();
+
+                    await LedgerEntry.create({
+                        client: client._id,
+                        company: compId,
+                        type: 'Advance',
+                        amount: rechargeAmount,
+                        date: date || new Date(),
+                        description: `Guest paid Fastag Recharge for Vehicle ${vehicle.carNumber} - Booking ${booking.bookingId}`,
+                        referenceId: vehicle._id
+                    });
+                }
+            }
+        } catch (gErr) {
+            console.error('Error deducting guest package for Fastag:', gErr);
+        }
+    }
 
     res.json({
         message: 'Fastag recharged successfully',
@@ -2242,6 +2403,24 @@ const updateFastagRecharge = asyncHandler(async (req, res) => {
     }
 
     await vehicle.save();
+
+    await updateFinancialTransaction({
+        companyId: vehicle.company,
+        sourceId: historyEntry._id,
+        sourceType: 'Fastag',
+        amount: newAmount,
+        date: historyEntry.date,
+        paymentMode: historyEntry.method,
+        bankAccountId: req.body.bankAccountId || null,
+        type: 'OUT',
+        category: 'Fastag Recharge',
+        description: `Fastag Recharge for Vehicle ${vehicle.carNumber}`,
+        reference: historyEntry.remarks || '',
+        receiptPhoto: historyEntry.receiptPhoto || '',
+        user: req.user?._id,
+        paidBy: req.body.paidBy || 'Company'
+    });
+
     res.json({ message: 'Fastag entry updated', newBalance: vehicle.fastagBalance });
 });
 
@@ -2263,6 +2442,14 @@ const deleteFastagRecharge = asyncHandler(async (req, res) => {
     // Adjust balance 
     const entryAmount = Number(historyEntry.amount) || 0;
     vehicle.fastagBalance = (vehicle.fastagBalance || 0) - entryAmount;
+
+    await removeFinancialTransaction({
+        sourceId: historyEntry._id,
+        sourceType: 'Fastag',
+        companyId: vehicle.company,
+        amount: entryAmount,
+        category: 'Fastag Recharge'
+    });
 
     // Remove entry
     vehicle.fastagHistory.pull(req.params.historyId);
@@ -2953,6 +3140,13 @@ const deleteBorderTax = asyncHandler(async (req, res) => {
     const entry = await BorderTax.findById(req.params.id);
 
     if (entry) {
+        await removeFinancialTransaction({
+            sourceId: entry._id,
+            sourceType: 'BorderTax',
+            companyId: entry.company,
+            amount: entry.amount,
+            category: 'Border Tax'
+        });
         await entry.deleteOne();
         res.json({ message: 'Border tax entry removed successfully' });
     } else {
@@ -2982,12 +3176,20 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
         nextServiceKm,
         nextServiceDate,
         status,
-        driverId
+        driverId,
+        paidBy,
+        bankAccountId,
+        bookingId,
+        bookingRef,
+        guestName
     } = req.body;
 
     // Normalize array values (FormData can send duplicate keys as arrays)
     if (Array.isArray(vehicleId)) vehicleId = vehicleId[0];
     if (Array.isArray(companyId)) companyId = companyId[0];
+
+    const numAmount = Number(amount);
+    const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
 
     const maintenanceData = {
         vehicle: vehicleId,
@@ -3000,10 +3202,10 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
         garageName,
         billNumber,
         billDate,
-        amount,
+        amount: numAmount,
         paymentMode,
         paymentStatus,
-        paymentSource,
+        paymentSource: effectivePaidBy === 'Guest' ? 'Guest' : 'Office',
         currentKm,
         nextServiceKm,
         nextServiceDate,
@@ -3016,6 +3218,76 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
     }
 
     const record = await Maintenance.create(maintenanceData);
+
+    // 1. By Company Deduction (Cash vs Bank)
+    if (effectivePaidBy === 'Company') {
+        const veh = await Vehicle.findById(vehicleId);
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: record._id,
+            sourceType: 'Maintenance',
+            amount: numAmount,
+            date: billDate || record.billDate,
+            paymentMode,
+            bankAccountId: bankAccountId || null,
+            type: 'OUT',
+            category: 'Vehicle Maintenance',
+            description: `Maintenance (${category || maintenanceType}) for Vehicle ${veh?.carNumber || ''}`,
+            reference: billNumber || '',
+            receiptPhoto: req.file ? req.file.path : '',
+            user: req.user?._id,
+            paidBy: effectivePaidBy
+        });
+    }
+
+    // 2. By Guest Package Deduction
+    if (effectivePaidBy === 'Guest') {
+        try {
+            let booking = null;
+            if (bookingRef) {
+                booking = await Booking.findById(bookingRef).populate('client');
+            } else if (bookingId) {
+                booking = await Booking.findOne({
+                    company: companyId,
+                    $or: [{ bookingId: bookingId }, { clientCode: bookingId }]
+                }).populate('client');
+            }
+
+            if (booking) {
+                booking.advancePaid = (booking.advancePaid || 0) + numAmount;
+                booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid);
+                if (booking.balanceDue === 0 && booking.totalAmount > 0) {
+                    booking.paymentStatus = 'Full Received';
+                } else if (booking.advancePaid > 0) {
+                    booking.paymentStatus = 'Advance Received';
+                }
+                await booking.save();
+
+                let client = booking.client;
+                if (!client && booking.mobileNumber && booking.mobileNumber !== 'TBA') {
+                    client = await Client.findOne({ company: companyId, mobile: booking.mobileNumber });
+                }
+                if (client) {
+                    client.totalPaid = (client.totalPaid || 0) + numAmount;
+                    client.balance = Math.max(0, (client.totalBilled || 0) - client.totalPaid);
+                    await client.save();
+
+                    const veh = await Vehicle.findById(vehicleId);
+                    await LedgerEntry.create({
+                        client: client._id,
+                        company: companyId,
+                        type: 'Advance',
+                        amount: numAmount,
+                        date: billDate || new Date(),
+                        description: `Guest paid Maintenance (${category || maintenanceType}) for Vehicle ${veh?.carNumber || ''} - Booking ${booking.bookingId}`,
+                        referenceId: record._id
+                    });
+                }
+            }
+        } catch (gErr) {
+            console.error('Error deducting guest package for Maintenance:', gErr);
+        }
+    }
 
     // Update vehicle lastOdometer if currentKm provided is higher
     if (currentKm) {
@@ -3292,6 +3564,25 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
         if (req.file) targetDoc.billPhoto = req.file.path;
 
         const updated = await targetDoc.save();
+
+        const veh = await Vehicle.findById(updated.vehicle);
+        await updateFinancialTransaction({
+            companyId: updated.company,
+            sourceId: updated._id,
+            sourceType: 'Maintenance',
+            amount: updated.amount,
+            date: updated.billDate,
+            paymentMode: updated.paymentMode,
+            bankAccountId: req.body.bankAccountId || null,
+            type: 'OUT',
+            category: 'Vehicle Maintenance',
+            description: `Maintenance (${updated.category || updated.maintenanceType}) for Vehicle ${veh?.carNumber || ''}`,
+            reference: updated.billNumber || '',
+            receiptPhoto: updated.billPhoto || '',
+            user: req.user?._id,
+            paidBy: updated.paymentSource === 'Guest' ? 'Guest' : 'Company'
+        });
+
         res.json(updated);
     } else if (docType === 'parking') {
         if (amount) targetDoc.amount = Number(amount);
@@ -3301,6 +3592,24 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
         if (req.file) targetDoc.receiptPhoto = req.file.path;
 
         const updated = await targetDoc.save();
+
+        await updateFinancialTransaction({
+            companyId: updated.company,
+            sourceId: updated._id,
+            sourceType: 'Parking',
+            amount: updated.amount,
+            date: updated.date,
+            paymentMode: req.body.paymentMode || 'Cash',
+            bankAccountId: req.body.bankAccountId || null,
+            type: 'OUT',
+            category: 'Parking & Toll',
+            description: `Parking / Misc (${updated.location || 'Parking'})`,
+            reference: updated.location || '',
+            receiptPhoto: updated.receiptPhoto || '',
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+
         res.json(updated);
     } else if (docType === 'attendance') {
         if (amount) targetDoc.amount = Number(amount);
@@ -3328,6 +3637,13 @@ const deleteMaintenanceRecord = asyncHandler(async (req, res) => {
     // 1. Try Maintenance Collection
     const record = await Maintenance.findById(id);
     if (record) {
+        await removeFinancialTransaction({
+            sourceId: record._id,
+            sourceType: 'Maintenance',
+            companyId: record.company,
+            amount: record.amount,
+            category: 'Vehicle Maintenance'
+        });
         await record.deleteOne();
         return res.json({ message: 'Maintenance record removed' });
     }
@@ -3335,6 +3651,13 @@ const deleteMaintenanceRecord = asyncHandler(async (req, res) => {
     // 2. Try Parking Collection
     const parkingRecord = await Parking.findById(id);
     if (parkingRecord) {
+        await removeFinancialTransaction({
+            sourceId: parkingRecord._id,
+            sourceType: 'Parking',
+            companyId: parkingRecord.company,
+            amount: parkingRecord.amount,
+            category: 'Parking & Toll'
+        });
         await parkingRecord.deleteOne();
         return res.json({ message: 'Parking record removed' });
     }
@@ -3342,6 +3665,11 @@ const deleteMaintenanceRecord = asyncHandler(async (req, res) => {
     // 3. Try Attendance Pending Expenses
     const attendanceDoc = await Attendance.findOne({ 'pendingExpenses._id': id });
     if (attendanceDoc) {
+        await removeFinancialTransaction({
+            sourceId: id,
+            sourceType: 'Expense',
+            companyId: attendanceDoc.company
+        });
         attendanceDoc.pendingExpenses = attendanceDoc.pendingExpenses.filter(e => e._id.toString() !== id);
         await attendanceDoc.save();
         return res.json({ message: 'Pending expense removed from attendance' });
@@ -3397,6 +3725,184 @@ const recalculateFuelMetrics = async (vehicleId) => {
     }
 };
 
+
+// ==========================================
+// ⛽ FUEL <-> CLIENT LEDGER SYNC HELPERS
+// ==========================================
+const syncFuelToClientLedger = async (fuelEntry) => {
+    try {
+        if (!fuelEntry) return;
+        const Client = require('../models/Client');
+        const LedgerEntry = require('../models/LedgerEntry');
+        const Booking = require('../models/Booking');
+        const DRSDuty = require('../models/DRSDuty');
+        const Vehicle = require('../models/Vehicle');
+
+        const isGuest = fuelEntry.paymentSource === 'Guest' || fuelEntry.paymentSource === 'Guest / Client' || (fuelEntry.paymentSource && fuelEntry.paymentSource.toLowerCase().includes('guest'));
+
+        // If not a guest payment, remove any existing ledger entry for this fuel
+        if (!isGuest) {
+            await removeFuelFromClientLedger(fuelEntry);
+            if (fuelEntry.isDeductedFromLedger) {
+                fuelEntry.isDeductedFromLedger = false;
+                await Fuel.findByIdAndUpdate(fuelEntry._id, { isDeductedFromLedger: false });
+            }
+            return;
+        }
+
+        let clientDoc = null;
+        let bkgIdStr = '';
+        let carNumStr = '';
+
+        // Fetch vehicle car number if possible
+        if (fuelEntry.vehicle) {
+            const v = await Vehicle.findById(fuelEntry.vehicle);
+            if (v) carNumStr = v.carNumber?.split('#')[0] || '';
+        }
+
+        // 1. Direct client lookup
+        if (fuelEntry.client && mongoose.Types.ObjectId.isValid(fuelEntry.client)) {
+            clientDoc = await Client.findById(fuelEntry.client);
+        }
+
+        // 2. Lookup via DRS Duty
+        if (!clientDoc && fuelEntry.drsDuty && mongoose.Types.ObjectId.isValid(fuelEntry.drsDuty)) {
+            const duty = await DRSDuty.findById(fuelEntry.drsDuty).populate('bookingRef');
+            if (duty) {
+                bkgIdStr = duty.bookingId || '';
+                if (duty.bookingRef && duty.bookingRef.client) {
+                    clientDoc = await Client.findById(duty.bookingRef.client);
+                } else if (duty.clientName) {
+                    clientDoc = await Client.findOne({
+                        company: fuelEntry.company,
+                        name: new RegExp('^' + duty.clientName.trim() + '$', 'i')
+                    });
+                }
+            }
+        }
+
+        // 3. Lookup via paymentBy (Guest Name / Booking ID / Mobile)
+        if (!clientDoc && fuelEntry.paymentBy && fuelEntry.paymentBy.trim()) {
+            const pBy = fuelEntry.paymentBy.trim();
+            // Try matching client by name
+            clientDoc = await Client.findOne({
+                company: fuelEntry.company,
+                name: new RegExp('^' + pBy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i')
+            });
+
+            // Try matching client by booking code / ID
+            if (!clientDoc) {
+                const bkg = await Booking.findOne({
+                    company: fuelEntry.company,
+                    $or: [{ bookingId: pBy }, { bookingCode: pBy }]
+                });
+                if (bkg && bkg.client) {
+                    bkgIdStr = bkg.bookingId || bkg.bookingCode || '';
+                    clientDoc = await Client.findById(bkg.client);
+                }
+            }
+        }
+
+        // 4. Fallback: Search DRS duty for same vehicle & date
+        if (!clientDoc && fuelEntry.vehicle && fuelEntry.date) {
+            const fuelDateStr = new Date(fuelEntry.date).toISOString().split('T')[0];
+            const vDoc = await Vehicle.findById(fuelEntry.vehicle);
+            const carNo = vDoc?.carNumber?.split('#')[0] || '';
+            if (carNo) {
+                const duties = await DRSDuty.find({
+                    company: fuelEntry.company,
+                    vehicleNumber: new RegExp(carNo.replace(/\s+/g, ''), 'i'),
+                    date: fuelDateStr
+                }).populate('bookingRef');
+
+                if (duties.length > 0) {
+                    const d = duties[0];
+                    bkgIdStr = d.bookingId || '';
+                    if (d.bookingRef && d.bookingRef.client) {
+                        clientDoc = await Client.findById(d.bookingRef.client);
+                    } else if (d.clientName) {
+                        clientDoc = await Client.findOne({
+                            company: fuelEntry.company,
+                            name: new RegExp('^' + d.clientName.trim() + '$', 'i')
+                        });
+                    }
+                }
+            }
+        }
+
+        if (!clientDoc) {
+            console.log(`[syncFuelToClientLedger] No client identified for guest fuel ${fuelEntry._id} (${fuelEntry.paymentBy})`);
+            return;
+        }
+
+        // Found clientDoc! Now create or update LedgerEntry
+        const existingLedger = await LedgerEntry.findOne({ referenceId: fuelEntry._id, type: 'Fuel' });
+        const newAmount = Number(fuelEntry.amount) || 0;
+        const desc = `Fuel paid by guest${carNumStr ? ` (${carNumStr})` : ''}${bkgIdStr ? ` - Booking ${bkgIdStr}` : ''}${fuelEntry.stationName ? ` [${fuelEntry.stationName}]` : ''}`;
+
+        if (existingLedger) {
+            const diff = newAmount - (existingLedger.amount || 0);
+            existingLedger.amount = newAmount;
+            existingLedger.date = fuelEntry.date || new Date();
+            existingLedger.client = clientDoc._id;
+            existingLedger.description = desc;
+            await existingLedger.save();
+
+            clientDoc.totalPaid = (clientDoc.totalPaid || 0) + diff;
+            clientDoc.balance = (clientDoc.balance || 0) - diff;
+            await clientDoc.save();
+        } else {
+            await LedgerEntry.create({
+                client: clientDoc._id,
+                company: fuelEntry.company,
+                type: 'Fuel',
+                amount: newAmount,
+                date: fuelEntry.date || new Date(),
+                description: desc,
+                referenceId: fuelEntry._id
+            });
+
+            clientDoc.totalPaid = (clientDoc.totalPaid || 0) + newAmount;
+            clientDoc.balance = (clientDoc.balance || 0) - newAmount;
+            await clientDoc.save();
+        }
+
+        // Update fuel doc with client reference and flag
+        await Fuel.findByIdAndUpdate(fuelEntry._id, {
+            client: clientDoc._id,
+            isDeductedFromLedger: true
+        });
+        fuelEntry.client = clientDoc._id;
+        fuelEntry.isDeductedFromLedger = true;
+        console.log(`[syncFuelToClientLedger] Successfully synced fuel ₹${newAmount} to client ledger: ${clientDoc.name} (${clientDoc._id})`);
+    } catch (err) {
+        console.error('[syncFuelToClientLedger] Error:', err);
+    }
+};
+
+const removeFuelFromClientLedger = async (fuelEntry) => {
+    try {
+        if (!fuelEntry) return;
+        const Client = require('../models/Client');
+        const LedgerEntry = require('../models/LedgerEntry');
+
+        const existingLedger = await LedgerEntry.findOne({ referenceId: fuelEntry._id, type: 'Fuel' });
+        if (existingLedger) {
+            const clientDoc = await Client.findById(existingLedger.client);
+            if (clientDoc) {
+                const amt = Number(existingLedger.amount) || 0;
+                clientDoc.totalPaid = (clientDoc.totalPaid || 0) - amt;
+                clientDoc.balance = (clientDoc.balance || 0) + amt;
+                await clientDoc.save();
+            }
+            await LedgerEntry.findByIdAndDelete(existingLedger._id);
+            console.log(`[removeFuelFromClientLedger] Reverted fuel ledger entry for fuel: ${fuelEntry._id}`);
+        }
+    } catch (err) {
+        console.error('[removeFuelFromClientLedger] Error:', err);
+    }
+};
+
 // @desc    Add Fuel Entry
 // @route   POST /api/admin/fuel
 // @access  Private/Admin
@@ -3445,33 +3951,30 @@ const addFuelEntry = asyncHandler(async (req, res) => {
         isDeductedFromLedger: !!client
     });
 
-    // Client Ledger Deduction Logic
-    if (client && (paymentSource === 'Guest / Client' || paymentSource === 'Guest')) {
-        try {
-            const ClientModel = require('../models/Client');
-            const LedgerEntryModel = require('../models/LedgerEntry');
-
-            const clientRecord = await ClientModel.findById(client);
-            if (clientRecord) {
-                // Fuel paid by guest is a payment/credit, so it reduces the balance
-                clientRecord.totalPaid += Number(amount);
-                clientRecord.balance -= Number(amount);
-                await clientRecord.save();
-
-                await LedgerEntryModel.create({
-                    client: client,
-                    company: companyId,
-                    type: 'Fuel',
-                    amount: Number(amount),
-                    description: `Fuel paid by guest (Vehicle: ${vehicleId})`,
-                    referenceId: fuelEntry._id,
-                    date: fuelEntry.date
-                });
-            }
-        } catch(e) {
-            console.error('Ledger Deduction Error:', e);
-        }
+    // 1. By Company Deduction (Cash vs Bank)
+    const effectivePaidBy = (paymentSource === 'Guest' || paymentBy === 'Guest') ? 'Guest' : 'Company';
+    if (effectivePaidBy === 'Company') {
+        const veh = await Vehicle.findById(vehicleId);
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: fuelEntry._id,
+            sourceType: 'Fuel',
+            amount: Number(amount),
+            date: date || fuelEntry.date,
+            paymentMode,
+            bankAccountId: req.body.bankAccountId || null,
+            type: 'OUT',
+            category: 'Vehicle Fuel',
+            description: `Fuel (${fuelType} - ${quantity}L) for Vehicle ${veh?.carNumber || ''} at ${stationName || 'Pump'}`,
+            reference: stationName || '',
+            receiptPhoto: slipPhoto || '',
+            user: req.user?._id,
+            paidBy: effectivePaidBy
+        });
     }
+
+    // Client Ledger Sync for Guest Fuel
+    await syncFuelToClientLedger(fuelEntry);
 
     // Try to link to Attendance to prevent duplication in Reports
     try {
@@ -3609,11 +4112,35 @@ const updateFuelEntry = asyncHandler(async (req, res) => {
     if (slipPhoto && slipPhoto.trim() !== '') {
         entry.slipPhoto = slipPhoto;
     }
+    if (req.body.client !== undefined) entry.client = req.body.client || null;
+    if (req.body.drsDuty !== undefined) entry.drsDuty = req.body.drsDuty || null;
 
     await entry.save();
 
+    // Sync Client Ledger for Guest Fuel
+    await syncFuelToClientLedger(entry);
+
     // Recalculate chain to ensure perfect mileage after update
     await recalculateFuelMetrics(entry.vehicle);
+
+    const veh = await Vehicle.findById(entry.vehicle);
+    const effectivePaidBy = (entry.paymentSource === 'Guest' || entry.paymentBy === 'Guest') ? 'Guest' : 'Company';
+    await updateFinancialTransaction({
+        companyId: entry.company,
+        sourceId: entry._id,
+        sourceType: 'Fuel',
+        amount: entry.amount,
+        date: entry.date,
+        paymentMode: entry.paymentMode,
+        bankAccountId: req.body.bankAccountId || null,
+        type: 'OUT',
+        category: 'Vehicle Fuel',
+        description: `Fuel (${entry.fuelType} - ${entry.quantity}L) for Vehicle ${veh?.carNumber || ''} at ${entry.stationName || 'Pump'}`,
+        reference: entry.stationName || '',
+        receiptPhoto: entry.slipPhoto || '',
+        user: req.user?._id,
+        paidBy: effectivePaidBy
+    });
 
     res.json({ message: 'Entry updated successfully' });
 });
@@ -3812,6 +4339,14 @@ const deleteFuelEntry = asyncHandler(async (req, res) => {
         throw new Error('Fuel entry not found');
     }
     const vehicleId = entry.vehicle;
+    await removeFinancialTransaction({
+        sourceId: entry._id,
+        sourceType: 'Fuel',
+        companyId: entry.company,
+        amount: entry.amount,
+        category: 'Vehicle Fuel'
+    });
+    await removeFuelFromClientLedger(entry);
     await Fuel.findByIdAndDelete(req.params.id);
 
     // Recalculate chain after deletion
@@ -3866,10 +4401,23 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
 
     // Handle permanent deletion
     if (status === 'deleted') {
+        await removeFinancialTransaction({
+            sourceId: expense._id,
+            sourceType: 'Expense',
+            companyId: attendance.company
+        });
         attendance.pendingExpenses.splice(expenseIndex, 1);
         await attendance.save();
         console.log(`[approveRejectExpense] Expense permanently deleted from attendance ${attendanceId}`);
         return res.json({ message: 'Expense permanently deleted' });
+    }
+
+    if (status === 'rejected') {
+        await removeFinancialTransaction({
+            sourceId: expense._id,
+            sourceType: 'Expense',
+            companyId: attendance.company
+        });
     }
 
     expense.status = status;
@@ -3959,31 +4507,28 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
                     attendance: attendanceId
                 });
 
-                // Client Ledger Deduction Logic
-                if (finalClient && finalPaymentSource === 'Guest') {
-                    try {
-                        const ClientModel = require('../models/Client');
-                        const LedgerEntryModel = require('../models/LedgerEntry');
+                // Client Ledger Sync for Guest Fuel
+                await syncFuelToClientLedger(fuelEntry);
 
-                        const clientRecord = await ClientModel.findById(finalClient);
-                        if (clientRecord) {
-                            clientRecord.totalPaid += Number(finalAmount);
-                            clientRecord.balance -= Number(finalAmount);
-                            await clientRecord.save();
-
-                            await LedgerEntryModel.create({
-                                client: finalClient,
-                                company: attendance.company,
-                                type: 'Fuel',
-                                amount: Number(finalAmount),
-                                description: `Fuel paid by guest (Vehicle: ${vehicleId})`,
-                                referenceId: fuelEntry._id,
-                                date: fuelEntry.date
-                            });
-                        }
-                    } catch(e) {
-                        console.error('Ledger Deduction Error on Approve:', e);
-                    }
+                // By Company (Office) Cash / Bank Ledger Sync
+                if (finalPaymentSource === 'Office') {
+                    const veh = await Vehicle.findById(vehicleId);
+                    await recordFinancialTransaction({
+                        companyId: attendance.company,
+                        sourceId: fuelEntry._id,
+                        sourceType: 'Fuel',
+                        amount: finalAmount,
+                        date: attendance.date ? new Date(attendance.date) : (expense.createdAt || new Date()),
+                        paymentMode: req.body.paymentMode || 'Cash',
+                        bankAccountId: req.body.bankAccountId || null,
+                        type: 'OUT',
+                        category: 'Vehicle Fuel',
+                        description: `Fuel (${expense.fuelType || 'Diesel'} - ${finalQuantity}L) for Vehicle ${veh?.carNumber || ''} approved from attendance`,
+                        reference: req.body.stationName || '',
+                        receiptPhoto: finalSlipPhoto,
+                        user: req.user?._id,
+                        paidBy: 'Company'
+                    });
                 }
             }
 
@@ -4061,7 +4606,12 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/advances
 // @access  Private/Admin
 const addAdvance = asyncHandler(async (req, res) => {
-    const { driverId, staffId, companyId, amount, remark, date, advanceType, givenBy, isStaffAdvance, month, year } = req.body;
+    const { 
+        driverId, staffId, companyId, amount, remark, date, 
+        advanceType, givenBy, paidBy, isStaffAdvance, month, year,
+        bankAccountId, paymentMode, paymentReference,
+        bookingId, bookingRef, guestName, clientRef
+    } = req.body;
 
     const recipientId = staffId || driverId;
     const recipient = await User.findById(recipientId);
@@ -4069,18 +4619,28 @@ const addAdvance = asyncHandler(async (req, res) => {
         return res.status(404).json({ message: 'Recipient not found' });
     }
 
+    const effectivePaidBy = paidBy || (givenBy === 'Guest' ? 'Guest' : 'Company');
+    const numAmount = Number(amount);
+
     const advanceData = {
         company: companyId,
-        amount: Number(amount),
+        amount: numAmount,
         remark: remark || 'Advance Payment',
         date: date || new Date(),
         status: 'Pending',
         createdBy: req.user._id,
-        advanceType: advanceType || 'Office',
-        givenBy: givenBy || 'Office',
+        advanceType: advanceType || (effectivePaidBy === 'Guest' ? 'Guest' : 'Office'),
+        givenBy: effectivePaidBy === 'Guest' ? 'Guest' : (givenBy || 'Office'),
+        paidBy: effectivePaidBy,
         month: month ? parseInt(month) : undefined,
         year: year ? parseInt(year) : undefined,
-        isStaffAdvance: !!isStaffAdvance
+        isStaffAdvance: !!isStaffAdvance,
+        paymentMode: paymentMode || (effectivePaidBy === 'Guest' ? 'Cash by Guest' : 'Bank Transfer'),
+        paymentReference: paymentReference || '',
+        guestName: guestName || '',
+        bookingId: bookingId || '',
+        booking: bookingRef || null,
+        bankAccount: (effectivePaidBy === 'Company' && bankAccountId) ? bankAccountId : null
     };
 
     if (isStaffAdvance || staffId) {
@@ -4092,6 +4652,97 @@ const addAdvance = asyncHandler(async (req, res) => {
 
     console.log(`[addAdvance] Saving advance:`, JSON.stringify(advanceData));
     const advance = await Advance.create(advanceData);
+
+    // 1. If By Company: Deduct from Cash in Hand or Bank Account
+    if (effectivePaidBy === 'Company') {
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: advance._id,
+            sourceType: 'Advance',
+            amount: numAmount,
+            date: date || advance.date,
+            paymentMode,
+            bankAccountId: bankAccountId || null,
+            type: 'OUT',
+            category: isStaffAdvance ? 'Staff Advance' : 'Driver Advance',
+            description: `Advance given to ${isStaffAdvance ? 'Staff' : 'Driver'} ${recipient.name} - ${remark || ''}`,
+            driverRef: !isStaffAdvance ? recipient._id : null,
+            driverName: !isStaffAdvance ? recipient.name : '',
+            reference: paymentReference || '',
+            user: req.user?._id,
+            paidBy: effectivePaidBy
+        });
+    }
+
+    // 2. If By Guest: Deduct from Guest's Booking package balance due & Client Ledger
+    if (effectivePaidBy === 'Guest') {
+        try {
+            let booking = null;
+            if (bookingRef) {
+                booking = await Booking.findById(bookingRef).populate('client');
+            } else if (bookingId) {
+                booking = await Booking.findOne({
+                    company: companyId,
+                    $or: [{ bookingId: bookingId }, { clientCode: bookingId }]
+                }).populate('client');
+            }
+
+            if (booking) {
+                advance.booking = booking._id;
+                advance.bookingId = booking.bookingId;
+                advance.guestName = booking.clientName || guestName || '';
+                await advance.save();
+
+                booking.advancePaid = (booking.advancePaid || 0) + numAmount;
+                booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid);
+                if (booking.balanceDue === 0 && booking.totalAmount > 0) {
+                    booking.paymentStatus = 'Full Received';
+                } else if (booking.advancePaid > 0) {
+                    booking.paymentStatus = 'Advance Received';
+                }
+                await booking.save();
+
+                let client = booking.client;
+                if (!client && booking.mobileNumber && booking.mobileNumber !== 'TBA') {
+                    client = await Client.findOne({ company: companyId, mobile: booking.mobileNumber });
+                }
+                if (client) {
+                    client.totalPaid = (client.totalPaid || 0) + numAmount;
+                    client.balance = Math.max(0, (client.totalBilled || 0) - client.totalPaid);
+                    await client.save();
+
+                    await LedgerEntry.create({
+                        client: client._id,
+                        company: companyId,
+                        type: 'Advance',
+                        amount: numAmount,
+                        date: date || new Date(),
+                        description: `Guest Advance paid directly to Driver ${recipient.name} (Booking ${booking.bookingId}) - ${remark || ''}`,
+                        referenceId: advance._id
+                    });
+                }
+            } else if (clientRef) {
+                const client = await Client.findById(clientRef);
+                if (client) {
+                    client.totalPaid = (client.totalPaid || 0) + numAmount;
+                    client.balance = Math.max(0, (client.totalBilled || 0) - client.totalPaid);
+                    await client.save();
+
+                    await LedgerEntry.create({
+                        client: client._id,
+                        company: companyId,
+                        type: 'Advance',
+                        amount: numAmount,
+                        date: date || new Date(),
+                        description: `Guest Advance paid directly to Driver ${recipient.name} - ${remark || ''}`,
+                        referenceId: advance._id
+                    });
+                }
+            }
+        } catch (guestErr) {
+            console.error('Error deducting guest package for advance:', guestErr);
+        }
+    }
 
     if (advance) {
         res.status(201).json(advance);
@@ -4161,6 +4812,14 @@ const getAdvances = asyncHandler(async (req, res) => {
             path: 'staff',
             select: 'name mobile designation'
         })
+        .populate({
+            path: 'bankAccount',
+            select: 'bankName accountHolder accountNumber currentBalance'
+        })
+        .populate({
+            path: 'booking',
+            select: 'clientCode clientName totalAmount advancePaid balanceDue travelStartDate travelEndDate'
+        })
         .sort({ date: -1 });
 
     console.log(`[getAdvances] Found ${advances.length} records`);
@@ -4183,6 +4842,28 @@ const deleteAdvance = asyncHandler(async (req, res) => {
     const advance = await Advance.findById(req.params.id);
 
     if (advance) {
+        await removeFinancialTransaction({
+            sourceId: advance._id,
+            sourceType: 'Advance',
+            companyId: advance.company,
+            driverRef: advance.driver || advance.staff,
+            amount: advance.amount,
+            category: advance.isStaffAdvance ? 'Staff Advance' : 'Driver Advance'
+        });
+
+        if (advance.paidBy === 'Guest' && advance.booking) {
+            try {
+                const booking = await Booking.findById(advance.booking);
+                if (booking) {
+                    booking.advancePaid = Math.max(0, (booking.advancePaid || 0) - (advance.amount || 0));
+                    booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid);
+                    await booking.save();
+                }
+            } catch (bErr) {
+                console.error('Error reverting guest booking for advance:', bErr);
+            }
+        }
+
         await advance.deleteOne();
         res.json({ message: 'Advance record removed' });
     } else {
@@ -4194,7 +4875,10 @@ const deleteAdvance = asyncHandler(async (req, res) => {
 // @route   PUT /api/admin/advances/:id
 // @access  Private/Admin
 const updateAdvance = asyncHandler(async (req, res) => {
-    const { amount, remark, date, advanceType, givenBy, driverId, staffId, month, year, isStaffAdvance } = req.body;
+    const { 
+        amount, remark, date, advanceType, givenBy, driverId, staffId, month, year, isStaffAdvance,
+        paidBy, bankAccountId, bookingId, bookingRef, guestName, paymentMode
+    } = req.body;
     const advance = await Advance.findById(req.params.id);
 
     if (advance) {
@@ -4208,6 +4892,13 @@ const updateAdvance = asyncHandler(async (req, res) => {
         }
         if (advanceType !== undefined) advance.advanceType = advanceType;
         if (givenBy !== undefined) advance.givenBy = givenBy;
+        if (paidBy !== undefined) advance.paidBy = paidBy;
+        if (bankAccountId !== undefined) advance.bankAccount = bankAccountId || null;
+        if (bookingRef !== undefined) advance.booking = bookingRef || null;
+        if (bookingId !== undefined) advance.bookingId = bookingId || '';
+        if (guestName !== undefined) advance.guestName = guestName || '';
+        if (paymentMode !== undefined) advance.paymentMode = paymentMode || '';
+
         if (driverId) {
             advance.driver = driverId;
             advance.staff = undefined;
@@ -4223,6 +4914,25 @@ const updateAdvance = asyncHandler(async (req, res) => {
         if (isStaffAdvance !== undefined) advance.isStaffAdvance = !!isStaffAdvance;
 
         const updatedAdvance = await advance.save();
+
+        const isStaff = updatedAdvance.isStaffAdvance || !!updatedAdvance.staff;
+        await updateFinancialTransaction({
+            companyId: updatedAdvance.company,
+            sourceId: updatedAdvance._id,
+            sourceType: 'Advance',
+            amount: updatedAdvance.amount,
+            date: updatedAdvance.date,
+            paymentMode: updatedAdvance.paymentMode,
+            bankAccountId: updatedAdvance.paidBy === 'Company' ? updatedAdvance.bankAccount : null,
+            type: 'OUT',
+            category: isStaff ? 'Staff Advance' : 'Driver Advance',
+            description: `Advance given to ${isStaff ? 'Staff' : 'Driver'} - ${updatedAdvance.remark || ''}`,
+            driverRef: updatedAdvance.driver || updatedAdvance.staff || null,
+            reference: updatedAdvance.paymentReference || '',
+            user: req.user?._id,
+            paidBy: updatedAdvance.paidBy || 'Company'
+        });
+
         res.json(updatedAdvance);
     } else {
         res.status(404).json({ message: 'Advance record not found' });
@@ -4244,11 +4954,30 @@ const addAllowance = asyncHandler(async (req, res) => {
     const allowance = await Allowance.create({
         driver: driverId,
         company: companyId,
-        amount,
+        amount: Number(amount),
         date: date || new Date(),
         remark: remark || 'Special Allowance',
         type: type || 'Other',
         createdBy: req.user._id
+    });
+
+    const driverDoc = await User.findById(driverId);
+    await recordFinancialTransaction({
+        companyId,
+        sourceId: allowance._id,
+        sourceType: 'Allowance',
+        amount: Number(amount),
+        date: allowance.date,
+        paymentMode: req.body.paymentMode || 'Cash',
+        bankAccountId: req.body.bankAccountId || null,
+        type: 'OUT',
+        category: 'Driver Allowance',
+        description: `Allowance (${allowance.type || 'Other'}) for Driver ${driverDoc?.name || ''} - ${allowance.remark || ''}`,
+        driverRef: driverId,
+        driverName: driverDoc?.name || '',
+        reference: allowance.remark || '',
+        user: req.user?._id,
+        paidBy: 'Company'
     });
 
     res.status(201).json(allowance);
@@ -4290,12 +5019,32 @@ const updateAllowance = asyncHandler(async (req, res) => {
     }
 
     if (driverId) allowance.driver = driverId;
-    if (amount !== undefined) allowance.amount = amount;
+    if (amount !== undefined) allowance.amount = Number(amount);
     if (date) allowance.date = date;
     if (remark) allowance.remark = remark;
     if (type) allowance.type = type;
 
     await allowance.save();
+
+    const driverDoc = await User.findById(allowance.driver);
+    await updateFinancialTransaction({
+        companyId: allowance.company,
+        sourceId: allowance._id,
+        sourceType: 'Allowance',
+        amount: Number(allowance.amount),
+        date: allowance.date,
+        paymentMode: req.body.paymentMode || 'Cash',
+        bankAccountId: req.body.bankAccountId || null,
+        type: 'OUT',
+        category: 'Driver Allowance',
+        description: `Allowance (${allowance.type || 'Other'}) for Driver ${driverDoc?.name || ''} - ${allowance.remark || ''}`,
+        driverRef: allowance.driver,
+        driverName: driverDoc?.name || '',
+        reference: allowance.remark || '',
+        user: req.user?._id,
+        paidBy: 'Company'
+    });
+
     res.json(allowance);
 });
 
@@ -4308,6 +5057,14 @@ const deleteAllowance = asyncHandler(async (req, res) => {
         res.status(404);
         throw new Error('Allowance not found');
     }
+    await removeFinancialTransaction({
+        sourceId: allowance._id,
+        sourceType: 'Allowance',
+        companyId: allowance.company,
+        driverRef: allowance.driver,
+        amount: allowance.amount,
+        category: 'Driver Allowance'
+    });
     await allowance.deleteOne();
     res.json({ message: 'Allowance deleted' });
 });
@@ -4865,6 +5622,28 @@ const addParkingEntry = asyncHandler(async (req, res) => {
         createdBy: req.user._id
     });
 
+    // 1. By Company Deduction (Cash vs Bank)
+    const effectivePaidBy = (req.body.paidBy || req.body.paymentSource) === 'Guest' ? 'Guest' : 'Company';
+    if (effectivePaidBy === 'Company' && Number(amount) > 0) {
+        const veh = await Vehicle.findById(actualVehicleId);
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: parking._id,
+            sourceType: 'Parking',
+            amount: Number(amount),
+            date: date || parking.date,
+            paymentMode: req.body.paymentMode,
+            bankAccountId: req.body.bankAccountId || null,
+            type: 'OUT',
+            category: 'Parking & Toll',
+            description: `Parking / Misc (${location || 'Parking'}) for Vehicle ${veh?.carNumber || ''}`,
+            reference: location || '',
+            receiptPhoto: receiptPhoto || '',
+            user: req.user?._id,
+            paidBy: effectivePaidBy
+        });
+    }
+
     res.status(201).json(parking);
 });
 
@@ -4943,6 +5722,25 @@ const updateParkingEntry = asyncHandler(async (req, res) => {
         if (receiptPhoto !== undefined) parking.receiptPhoto = receiptPhoto;
 
         const updatedParking = await parking.save();
+
+        const veh = await Vehicle.findById(updatedParking.vehicle);
+        await updateFinancialTransaction({
+            companyId: updatedParking.company,
+            sourceId: updatedParking._id,
+            sourceType: 'Parking',
+            amount: updatedParking.amount,
+            date: updatedParking.date,
+            paymentMode: req.body.paymentMode || 'Cash',
+            bankAccountId: req.body.bankAccountId || null,
+            type: 'OUT',
+            category: 'Parking & Toll',
+            description: `Parking / Misc (${updatedParking.location || 'Parking'}) for Vehicle ${veh?.carNumber || ''}`,
+            reference: updatedParking.location || '',
+            receiptPhoto: updatedParking.receiptPhoto || '',
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+
         res.json(updatedParking);
     } else {
         res.status(404);
@@ -4954,8 +5752,20 @@ const updateParkingEntry = asyncHandler(async (req, res) => {
 // @route   DELETE /api/admin/parking/:id
 // @access  Private/AdminOrExecutive
 const deleteParkingEntry = asyncHandler(async (req, res) => {
-    await Parking.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Parking record removed' });
+    const parking = await Parking.findById(req.params.id);
+    if (parking) {
+        await removeFinancialTransaction({
+            sourceId: parking._id,
+            sourceType: 'Parking',
+            companyId: parking.company,
+            amount: parking.amount,
+            category: 'Parking & Toll'
+        });
+        await parking.deleteOne();
+        res.json({ message: 'Parking record removed' });
+    } else {
+        res.status(404).json({ message: 'Parking record not found' });
+    }
 });
 
 // --- STAFF MANAGEMENT ---
@@ -7016,8 +7826,11 @@ const getLiveFeed = asyncHandler(async (req, res) => {
         date: targetDate // Strictly show attendance for the target date only
     };
 
+    const startOfDay = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).startOf('day').minus({ hours: 6 }).toJSDate();
+    const endOfDay = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
+
     // EXCLUDE 'deleted' and 'blocked' drivers explicitly
-    const [attendanceToday, fuelEntriesToday, totalVehiclesCount, allDriversFromDB, allVehicles, outsideVehiclesToday] = await Promise.all([
+    const [attendanceToday, fuelEntriesToday, totalVehiclesCount, allDriversFromDB, allVehicles, outsideVehiclesToday, drsDutiesToday] = await Promise.all([
         Attendance.find(attQuery).populate('driver', 'name mobile isFreelancer salary dailyWage overtime').populate('vehicle', 'carNumber model').lean(),
         Fuel.find({ company: companyObjectId, date: { $gte: startDT, $lte: endDT } }).populate('vehicle', 'carNumber').lean(),
         Vehicle.countDocuments({ company: companyObjectId, isOutsideCar: { $ne: true }, status: 'active' }),
@@ -7032,9 +7845,49 @@ const getLiveFeed = asyncHandler(async (req, res) => {
             company: companyObjectId,
             isOutsideCar: true,
             carNumber: { $regex: new RegExp(`#${targetDate}(#|$)`) }
+        }).lean(),
+        DRSDuty.find({
+            company: companyObjectId,
+            date: { $gte: startOfDay, $lte: endOfDay }
         }).lean()
     ]);
-    console.log(`[LIVE_FEED_QUERY] Att: ${attendanceToday.length}, Fuel: ${fuelEntriesToday.length}, Drivers: ${allDriversFromDB.length}, Vehicles: ${allVehicles.length}`);
+    console.log(`[LIVE_FEED_QUERY] Att: ${attendanceToday.length}, Fuel: ${fuelEntriesToday.length}, Drivers: ${allDriversFromDB.length}, Vehicles: ${allVehicles.length}, DRS: ${drsDutiesToday.length}`);
+
+    // Enrich attendance records with Guest Name & Duty info from DRS Duty or Attendance fields
+    attendanceToday.forEach(att => {
+        let guest = att.guestName || '';
+        let dutyText = att.punchOut?.remarks || att.dutyType || '';
+        let hotel = att.hotel || '';
+        let bkgCode = '';
+
+        const drvId = (att.driver?._id || att.driver || '').toString();
+        const drvName = (att.driver?.name || '').toLowerCase().trim();
+        const vehId = (att.vehicle?._id || att.vehicle || '').toString();
+        const vehNum = (att.vehicle?.carNumber || '').replace(/[^0-9]/g, '');
+
+        const matched = drsDutiesToday.find(d => {
+            const dDrvId = (d.driver?._id || d.driver || '').toString();
+            const dVehId = (d.vehicle?._id || d.vehicle || '').toString();
+            const dDrvName = (d.customDriverName || '').toLowerCase().trim();
+            const dVehNum = (d.customCarNumber || '').replace(/[^0-9]/g, '');
+
+            const driverMatch = (dDrvId && dDrvId === drvId) || (dDrvName && drvName && (dDrvName === drvName || dDrvName.includes(drvName) || drvName.includes(dDrvName)));
+            const vehMatch = (dVehId && dVehId === vehId) || (dVehNum && vehNum && (dVehNum === vehNum || dVehNum.includes(vehNum) || vehNum.includes(dVehNum)));
+            return driverMatch || vehMatch;
+        });
+
+        if (matched) {
+            if (!guest) guest = matched.clientName || '';
+            if (!dutyText) dutyText = matched.duty || matched.itinerary || '';
+            if (!hotel) hotel = matched.hotel || matched.pickupPoint || '';
+            bkgCode = matched.bookingId || '';
+        }
+
+        att.guestName = guest;
+        att.dutyDetails = dutyText;
+        att.hotelName = hotel;
+        att.bookingCode = bkgCode;
+    });
 
     // 1. Combine Drivers (DB active + Anyone who worked today)
     const driversInAttendanceRaw = attendanceToday.map(a => a.driver).filter(d => d);
@@ -7288,6 +8141,25 @@ const updateBorderTax = asyncHandler(async (req, res) => {
         if (driverId) entry.driver = driverId;
         if (req.file) entry.receiptPhoto = req.file.path.replace(/\\/g, '/');
         const updatedEntry = await entry.save();
+
+        const veh = await Vehicle.findById(updatedEntry.vehicle);
+        await updateFinancialTransaction({
+            companyId: updatedEntry.company,
+            sourceId: updatedEntry._id,
+            sourceType: 'BorderTax',
+            amount: updatedEntry.amount,
+            date: updatedEntry.date,
+            paymentMode: req.body.paymentMode || 'Cash',
+            bankAccountId: req.body.bankAccountId || null,
+            type: 'OUT',
+            category: 'Border Tax',
+            description: `Border Tax (${updatedEntry.borderName}) for Vehicle ${veh?.carNumber || ''}`,
+            reference: updatedEntry.borderName,
+            receiptPhoto: updatedEntry.receiptPhoto || '',
+            user: req.user?._id,
+            paidBy: req.body.paidBy || 'Company'
+        });
+
         res.json(updatedEntry);
     } else {
         res.status(404).json({ message: 'Entry not found' });

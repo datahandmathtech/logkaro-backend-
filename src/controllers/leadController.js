@@ -5,7 +5,9 @@ const Client = require('../models/Client');
 const LedgerEntry = require('../models/LedgerEntry');
 const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
+const CashTransaction = require('../models/CashTransaction');
 const Company = require('../models/Company');
+const { removeFinancialTransaction } = require('../services/transactionSyncService');
 const { getNextSequence, getNextClientCode, previewNextClientCode } = require('../models/Sequence');
 const asyncHandler = require('express-async-handler');
 
@@ -265,6 +267,7 @@ const deleteLead = asyncHandler(async (req, res) => {
             await DRSDuty.deleteMany({ leadId: lead._id });
             await LedgerEntry.deleteMany({ referenceId: lead._id });
         }
+        await removeFinancialTransaction({ sourceId: lead._id });
     } catch (cleanupErr) {
         console.error('Error cleaning up associated lead records:', cleanupErr);
     }
@@ -378,34 +381,70 @@ const convertToBooking = asyncHandler(async (req, res) => {
             company: lead.company,
             type: 'Advance',
             amount: advance,
+            date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
             description: `Advance received for Booking ${bookingId} via ${paymentMode || 'Cash'} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
             referenceId: lead._id
         });
     }
 
-    // Record into Bank Transaction if Bank Account is selected & advance > 0
+    // Record into Cash Book or Bank Book
     let bank = null;
-    if (advance > 0 && bankAccountId) {
-        bank = await BankAccount.findById(bankAccountId);
-        if (bank) {
-            await BankTransaction.create({
-                company: lead.company,
-                bankAccount: bank._id,
-                bankName: bank.bankName,
-                type: 'IN',
-                amount: advance,
-                category: 'Booking Advance',
-                paymentMode: paymentMode || 'UPI / QR Code',
-                reference: paymentReference || '',
-                paymentScreenshot: paymentScreenshot || '',
-                description: `Advance Payment Received - ${lead.clientName}`,
-                leadRef: lead._id,
-                clientRef: client._id,
-                date: new Date(),
-                createdBy: req.user ? req.user._id : null
-            });
-            bank.currentBalance += advance;
-            await bank.save();
+    if (advance > 0) {
+        const isCash = (
+            paymentMode === 'Cash' ||
+            paymentMode === 'Driver Cash' ||
+            paymentMode === 'Cash to Company' ||
+            (paymentMode && paymentMode.toLowerCase().includes('cash'))
+        );
+
+        if (isCash) {
+            try {
+                await CashTransaction.create({
+                    company: lead.company,
+                    type: 'IN',
+                    amount: advance,
+                    category: 'Booking Advance',
+                    reference: paymentReference || '',
+                    receiptPhoto: paymentScreenshot || '',
+                    description: `Advance Payment Received - ${lead.clientName}`,
+                    leadRef: lead._id,
+                    clientRef: client._id,
+                    guestName: lead.clientName || '',
+                    sourceId: lead._id,
+                    sourceType: 'LeadAdvance',
+                    date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
+                    createdBy: req.user ? req.user._id : null
+                });
+                await Company.findByIdAndUpdate(lead.company, {
+                    $inc: { cashBalance: advance }
+                });
+            } catch (cashErr) {
+                console.error('Error creating cash transaction for advance:', cashErr);
+            }
+        } else if (bankAccountId) {
+            bank = await BankAccount.findById(bankAccountId);
+            if (bank) {
+                await BankTransaction.create({
+                    company: lead.company,
+                    bankAccount: bank._id,
+                    bankName: bank.bankName,
+                    type: 'IN',
+                    amount: advance,
+                    category: 'Booking Advance',
+                    paymentMode: paymentMode || 'UPI / QR Code',
+                    reference: paymentReference || '',
+                    paymentScreenshot: paymentScreenshot || '',
+                    description: `Advance Payment Received - ${lead.clientName}`,
+                    leadRef: lead._id,
+                    clientRef: client._id,
+                    sourceId: lead._id,
+                    sourceType: 'LeadAdvance',
+                    date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
+                    createdBy: req.user ? req.user._id : null
+                });
+                bank.currentBalance += advance;
+                await bank.save();
+            }
         }
     }
 
@@ -417,7 +456,37 @@ const convertToBooking = asyncHandler(async (req, res) => {
     const agentName = lead.travelAgentName || (client && client.clientType === 'Travel Agent' ? (client.agencyName || client.name) : '');
     const agentMob = lead.travelAgentMobile || (client && client.clientType === 'Travel Agent' ? client.mobile : '');
 
-    for (const [idx, day] of (lead.itinerary || []).entries()) {
+    let itineraryDays = Array.isArray(lead.itinerary) && lead.itinerary.length > 0 ? [...lead.itinerary] : [];
+    if (lead.travelStartDate && lead.travelEndDate) {
+        const start = new Date(lead.travelStartDate);
+        const end = new Date(lead.travelEndDate);
+        const diffDays = Math.max(1, Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1);
+        if (itineraryDays.length < diffDays) {
+            for (let i = itineraryDays.length; i < diffDays; i++) {
+                const dayDate = new Date(start);
+                dayDate.setDate(start.getDate() + i);
+                itineraryDays.push({
+                    dayNo: i + 1,
+                    date: dayDate,
+                    time: '09:00 AM',
+                    duty: i === 0 ? 'Airport Pickup & Local Sightseeing' : (i === diffDays - 1 ? 'City Local & Station/Airport Drop' : 'City Tour / Sightseeing'),
+                    vehicleType: lead.carType || 'Sedan',
+                    amount: 0
+                });
+            }
+        }
+    } else if (itineraryDays.length === 0) {
+        itineraryDays.push({
+            dayNo: 1,
+            date: lead.travelStartDate || new Date(),
+            time: '09:00 AM',
+            duty: 'Airport Pickup & Local Sightseeing',
+            vehicleType: lead.carType || 'Sedan',
+            amount: 0
+        });
+    }
+
+    for (const [idx, day] of itineraryDays.entries()) {
         const dayNo = day.dayNo || (idx + 1);
         for (let i = 0; i < numberOfCars; i++) {
             const dutyText = day.duty || day.description || 'Scheduled Duty';
@@ -515,9 +584,15 @@ const convertToBooking = asyncHandler(async (req, res) => {
         );
     }
 
-    // Link bookingRef to BankTransaction if created
-    if (advance > 0 && bank) {
-        await BankTransaction.updateMany({ leadRef: lead._id, bookingRef: null }, { bookingRef: booking._id });
+    // Link bookingRef to BankTransaction / CashTransaction if created
+    if (advance > 0) {
+        if (bank) {
+            await BankTransaction.updateMany({ leadRef: lead._id, bookingRef: null }, { bookingRef: booking._id });
+        }
+        await CashTransaction.updateMany(
+            { leadRef: lead._id, bookingRef: null },
+            { bookingRef: booking._id, bookingId: booking.bookingCode || booking.bookingId || '' }
+        );
     }
 
     // 6. Update lead status and reference, and link drsDuties with bookingRef

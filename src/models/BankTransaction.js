@@ -64,6 +64,15 @@ const bankTransactionSchema = new mongoose.Schema({
         default: Date.now,
         required: true
     },
+    // Polymorphic Source Link (Advance, Fuel, Maintenance, BorderTax, Fastag, Parking, Booking, Expense, Allowance, etc.)
+    sourceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+    },
+    sourceType: {
+        type: String,
+        default: ''
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -75,5 +84,6 @@ const bankTransactionSchema = new mongoose.Schema({
 
 bankTransactionSchema.index({ company: 1, date: -1 });
 bankTransactionSchema.index({ bankAccount: 1, date: -1 });
+bankTransactionSchema.index({ sourceId: 1 });
 
 module.exports = mongoose.model('BankTransaction', bankTransactionSchema);

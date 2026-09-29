@@ -5,7 +5,8 @@ const {
     createDRSDuty,
     updateDRSDuty,
     deleteDRSDuty,
-    getDRSDutiesByVehicle
+    getDRSDutiesByVehicle,
+    collectDRSPayment
 } = require('../controllers/drsController');
 const { adminOrExecutive, checkCompany, protect } = require('../middleware/authMiddleware');
 
@@ -19,6 +20,9 @@ router.route('/:companyId/by-vehicle')
 
 router.route(['/:companyId', '/company/:companyId'])
     .get(adminOrExecutive, checkCompany, getDRSDuties);
+
+router.route('/:id/collect-payment')
+    .post(adminOrExecutive, collectDRSPayment);
 
 router.route('/:id')
     .put(adminOrExecutive, updateDRSDuty)

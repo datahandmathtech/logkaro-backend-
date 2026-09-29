@@ -4,6 +4,8 @@ const Client = require('../models/Client');
 const LedgerEntry = require('../models/LedgerEntry');
 const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
+const CashTransaction = require('../models/CashTransaction');
+const Company = require('../models/Company');
 const asyncHandler = require('express-async-handler');
 
 // @desc    Get all bookings for a company with filters
@@ -44,44 +46,8 @@ const getBookings = asyncHandler(async (req, res) => {
         .sort({ createdAt: -1 });
 
     
-    // Lazy auto-complete check: if trip end date has passed by at least 1 day OR balance is 0, move to completed
-    const now = new Date();
-    let hasUpdates = false;
-    for (let b of bookings) {
-        if (b.bookingStatus === 'Confirmed' || b.bookingStatus === 'Ongoing') {
-            let shouldComplete = false;
-            
-            
-            // Check 1: Balance is 0
-            const actualBalance = (b.packagePrice || b.totalAmount || 0) - (b.advancePaid || 0);
-              console.log('--- AUTO-COMPLETE DEBUG ---');
-              console.log('Booking:', b._id, 'Status:', b.bookingStatus);
-              console.log('pkg:', b.packagePrice, 'tot:', b.totalAmount, 'adv:', b.advancePaid);
-              console.log('actualBalance:', actualBalance);
-              if (actualBalance <= 0 && b.advancePaid > 0) {
-                  console.log('=> completing due to balance');
-                  shouldComplete = true;
-              }
-
-            
-            // Check 2: Date has passed
-            const endDate = b.travelEndDate ? new Date(b.travelEndDate) : null;
-            if (endDate && !shouldComplete) {
-                const nextDay = new Date(endDate);
-                nextDay.setDate(nextDay.getDate() + 1);
-                nextDay.setHours(0,0,0,0);
-                if (now >= nextDay) {
-                    shouldComplete = true;
-                }
-            }
-            
-            if (shouldComplete) {
-                b.bookingStatus = 'Completed';
-                await b.save();
-                hasUpdates = true;
-            }
-        }
-    }
+    // Note: Do not auto-complete based on balance <= 0 (full payment does not mean trip is completed).
+    // Trip completion should only occur when explicitly completed by user or through DRS duty closure.
 
     
     // If we updated any, just return the updated array directly without re-fetching
@@ -202,46 +168,78 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
         company: booking.company,
         type: 'Payment',
         amount: paymentAmount,
+        date: paymentDate ? new Date(paymentDate) : new Date(),
         description: `Payment received for ${booking.bookingId} (${booking.clientCode || ''}) via ${paymentMode || 'Cash'} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
         referenceId: booking._id
     });
 
-    // Create Bank Transaction & Update Bank Account Balance
+    // Sync to Cash Book or Bank Book depending on paymentMode
     try {
-        let bank = null;
-        if (req.body.bankAccountId) {
-            bank = await BankAccount.findById(req.body.bankAccountId);
-        }
-        if (!bank) {
-            bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
-                || await BankAccount.findOne({ company: booking.company });
-        }
+        const isCash = (
+            paymentMode === 'Cash' ||
+            paymentMode === 'Driver Cash' ||
+            paymentMode === 'Cash to Company' ||
+            (paymentMode && paymentMode.toLowerCase().includes('cash'))
+        );
 
-        if (bank) {
-            await BankTransaction.create({
+        if (isCash) {
+            await CashTransaction.create({
                 company: booking.company,
-                bankAccount: bank._id,
-                bankName: bank.bankName || '',
                 type: 'IN',
                 amount: paymentAmount,
-                paymentMode: paymentMode || 'Bank Transfer / NEFT',
                 category: 'Booking Payment',
                 reference: paymentReference || '',
                 description: `Payment Received - ${booking.clientName}`,
                 bookingRef: booking._id,
+                bookingId: booking.bookingCode || booking.bookingId || '',
+                guestName: booking.clientName || '',
                 clientRef: booking.client || null,
+                sourceId: booking._id,
+                sourceType: 'BookingPayment',
                 date: paymentDate ? new Date(paymentDate) : new Date(),
                 createdBy: req.user ? req.user._id : null
             });
-            bank.currentBalance = (bank.currentBalance || 0) + paymentAmount;
-            await bank.save();
+            await Company.findByIdAndUpdate(booking.company, {
+                $inc: { cashBalance: paymentAmount }
+            });
+        } else {
+            let bank = null;
+            if (req.body.bankAccountId) {
+                bank = await BankAccount.findById(req.body.bankAccountId);
+            }
+            if (!bank) {
+                bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
+                    || await BankAccount.findOne({ company: booking.company });
+            }
+
+            if (bank) {
+                await BankTransaction.create({
+                    company: booking.company,
+                    bankAccount: bank._id,
+                    bankName: bank.bankName || '',
+                    type: 'IN',
+                    amount: paymentAmount,
+                    paymentMode: paymentMode || 'Bank Transfer / NEFT',
+                    category: 'Booking Payment',
+                    reference: paymentReference || '',
+                    description: `Payment Received - ${booking.clientName}`,
+                    bookingRef: booking._id,
+                    clientRef: booking.client || null,
+                    sourceId: booking._id,
+                    sourceType: 'BookingPayment',
+                    date: paymentDate ? new Date(paymentDate) : new Date(),
+                    createdBy: req.user ? req.user._id : null
+                });
+                bank.currentBalance = (bank.currentBalance || 0) + paymentAmount;
+                await bank.save();
+            }
         }
-    } catch (bankErr) {
-        console.error('Error creating bank transaction on booking payment:', bankErr);
+    } catch (paymentSyncErr) {
+        console.error('Error syncing payment to Cash/Bank Book:', paymentSyncErr);
     }
 
     res.json({
-        message: 'Payment recorded successfully and synced to Bank Book',
+        message: 'Payment recorded successfully',
         booking
     });
 });
@@ -265,10 +263,6 @@ const cancelBooking = asyncHandler(async (req, res) => {
     
     // Process refund logic
     if (refund > 0) {
-        const LedgerEntry = require('../models/LedgerEntry');
-        const BankAccount = require('../models/BankAccount');
-        const BankTransaction = require('../models/BankTransaction');
-
         await LedgerEntry.create({
             client: booking.client,
             company: booking.company,
@@ -279,7 +273,31 @@ const cancelBooking = asyncHandler(async (req, res) => {
             date: new Date()
         });
 
-        if (refundMode === 'Bank') {
+        const isCashRefund = (refundMode && refundMode.toLowerCase().includes('cash')) || refundMode === 'Cash';
+
+        if (isCashRefund) {
+            try {
+                await CashTransaction.create({
+                    company: booking.company,
+                    type: 'OUT',
+                    amount: refund,
+                    category: 'Refund',
+                    reference: '',
+                    description: `Refund Issued - ${booking.clientName}`,
+                    bookingRef: booking._id,
+                    bookingId: booking.bookingCode || booking.bookingId || '',
+                    guestName: booking.clientName || '',
+                    clientRef: booking.client || null,
+                    date: new Date(),
+                    createdBy: req.user ? req.user._id : null
+                });
+                await Company.findByIdAndUpdate(booking.company, {
+                    $inc: { cashBalance: -refund }
+                });
+            } catch (cashRefundErr) {
+                console.error('Error creating cash refund transaction:', cashRefundErr);
+            }
+        } else {
             try {
                 let bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
                     || await BankAccount.findOne({ company: booking.company });

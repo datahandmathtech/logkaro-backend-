@@ -263,9 +263,8 @@ router.get('/events/details/:eventId', adminOrExecutive, checkCompany, getEventD
 router.put('/events/:id', adminOrExecutive, checkCompany, updateEvent);
 router.delete('/events/:id', adminOrExecutive, checkCompany, deleteEvent);
 
-// Rate Cards
-router.post('/events/:id/ratecard', adminOrExecutive, checkCompany, addRateCard);
-router.put('/events/:id/ratecard/:rateId', adminOrExecutive, checkCompany, updateRateCard);
-router.delete('/events/:id/ratecard/:rateId', adminOrExecutive, checkCompany, deleteRateCard);
+// Bank Accounts
+const { getBankAccounts } = require('../controllers/bankController');
+router.get('/bank-accounts/:companyId', adminOrExecutive, checkCompany, getBankAccounts);
 
 module.exports = router;
