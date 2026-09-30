@@ -7783,283 +7783,298 @@ const addPendingExpenseFromAdmin = asyncHandler(async (req, res) => {
 // @route   GET /api/admin/live-feed/:companyId
 // @access  Private/Admin+Executive
 const getLiveFeed = asyncHandler(async (req, res) => {
-    const { companyId } = req.params;
-    const { date } = req.query;
+    try {
+        const { companyId } = req.params;
+        const { date } = req.query;
 
-    if (!mongoose.Types.ObjectId.isValid(companyId)) {
-        res.status(400);
-        throw new Error('Invalid Company ID');
-    }
-
-    const todayISTString = DateTime.now().setZone('Asia/Kolkata').toFormat('yyyy-MM-dd');
-    const targetDate = date || todayISTString;
-
-    // 🔒 SECURE CONTEXT: Use session-based company ID
-    const scId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company;
-    if (!scId) return res.status(403).json({ message: 'Unauthorized: Company context missing.' });
-
-    const companyObjectId = new mongoose.Types.ObjectId(scId);
-    const cacheKey = `livefeed_${scId}_${targetDate}`;
-
-    console.log(`[LIVE_FEED_DEBUG] Co: ${scId}, Date: ${targetDate}, QueryDate: ${date}`);
-
-    // Explicitly allow manual refresh from the client
-    if (req.query.refresh === 'true') {
-        DASHBOARD_CACHE.delete(cacheKey);
-    }
-
-    if (DASHBOARD_CACHE.has(cacheKey)) {
-        const cached = DASHBOARD_CACHE.get(cacheKey);
-        if (Date.now() - cached.time < 30 * 1000) { // 30s cache for live feed
-            console.log(`[LIVE_FEED] Returning Cached Data for ${scId} - ${targetDate}`);
-            return res.json(cached.data);
-        }
-    }
-
-    // Use proper Date range for Fuel collection since it stores Date objects
-    const startDT = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
-    const endDT = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
-
-    const isToday = targetDate === todayISTString;
-    const attQuery = {
-        company: companyObjectId,
-        date: targetDate // Strictly show attendance for the target date only
-    };
-
-    const startOfDay = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).startOf('day').minus({ hours: 6 }).toJSDate();
-    const endOfDay = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
-
-    // EXCLUDE 'deleted' and 'blocked' drivers explicitly
-    const [attendanceToday, fuelEntriesToday, totalVehiclesCount, allDriversFromDB, allVehicles, outsideVehiclesToday, drsDutiesToday] = await Promise.all([
-        Attendance.find(attQuery).populate('driver', 'name mobile isFreelancer salary dailyWage overtime').populate('vehicle', 'carNumber model').lean(),
-        Fuel.find({ company: companyObjectId, date: { $gte: startDT, $lte: endDT } }).populate('vehicle', 'carNumber').lean(),
-        Vehicle.countDocuments({ company: companyObjectId, isOutsideCar: { $ne: true }, status: 'active' }),
-        User.find({
-            company: companyObjectId,
-            role: 'Driver',
-            isFreelancer: { $ne: true },
-            status: { $in: ['active', 'Active', 'Present'] }
-        }).select('name mobile isFreelancer salary dailyWage overtime').lean(),
-        Vehicle.find({ company: companyObjectId, isOutsideCar: { $ne: true }, status: 'active' }).select('carNumber model status').lean(),
-        Vehicle.find({
-            company: companyObjectId,
-            isOutsideCar: true,
-            carNumber: { $regex: new RegExp(`#${targetDate}(#|$)`) }
-        }).lean(),
-        DRSDuty.find({
-            company: companyObjectId,
-            date: { $gte: startOfDay, $lte: endOfDay }
-        }).lean()
-    ]);
-    console.log(`[LIVE_FEED_QUERY] Att: ${attendanceToday.length}, Fuel: ${fuelEntriesToday.length}, Drivers: ${allDriversFromDB.length}, Vehicles: ${allVehicles.length}, DRS: ${drsDutiesToday.length}`);
-
-    // Enrich attendance records with Guest Name & Duty info from DRS Duty or Attendance fields
-    attendanceToday.forEach(att => {
-        let guest = att.guestName || '';
-        let dutyText = att.punchOut?.remarks || att.dutyType || '';
-        let hotel = att.hotel || '';
-        let bkgCode = '';
-
-        const drvId = (att.driver?._id || att.driver || '').toString();
-        const drvName = (att.driver?.name || '').toLowerCase().trim();
-        const vehId = (att.vehicle?._id || att.vehicle || '').toString();
-        const vehNum = (att.vehicle?.carNumber || '').replace(/[^0-9]/g, '');
-
-        const matched = drsDutiesToday.find(d => {
-            const dDrvId = (d.driver?._id || d.driver || '').toString();
-            const dVehId = (d.vehicle?._id || d.vehicle || '').toString();
-            const dDrvName = (d.customDriverName || '').toLowerCase().trim();
-            const dVehNum = (d.customCarNumber || '').replace(/[^0-9]/g, '');
-
-            const driverMatch = (dDrvId && dDrvId === drvId) || (dDrvName && drvName && (dDrvName === drvName || dDrvName.includes(drvName) || drvName.includes(dDrvName)));
-            const vehMatch = (dVehId && dVehId === vehId) || (dVehNum && vehNum && (dVehNum === vehNum || dVehNum.includes(vehNum) || vehNum.includes(dVehNum)));
-            return driverMatch || vehMatch;
-        });
-
-        if (matched) {
-            if (!guest) guest = matched.clientName || '';
-            if (!dutyText) dutyText = matched.duty || matched.itinerary || '';
-            if (!hotel) hotel = matched.hotel || matched.pickupPoint || '';
-            bkgCode = matched.bookingId || '';
+        if (!mongoose.Types.ObjectId.isValid(companyId)) {
+            res.status(400);
+            throw new Error('Invalid Company ID');
         }
 
-        att.guestName = guest;
-        att.dutyDetails = dutyText;
-        att.hotelName = hotel;
-        att.bookingCode = bkgCode;
-    });
-
-    // 1. Combine Drivers (DB active + Anyone who worked today)
-    const driversInAttendanceRaw = attendanceToday.map(a => a.driver).filter(d => d);
-    const seenDriverIds = new Set(allDriversFromDB.map(df => df._id.toString()));
-    const driversInAttendance = [];
-
-    driversInAttendanceRaw.forEach(d => {
-        const dId = d._id ? d._id.toString() : d.toString();
-        if (!seenDriverIds.has(dId)) {
-            driversInAttendance.push(d);
-            seenDriverIds.add(dId);
-        }
-    });
-
-    const combinedDrivers = [...allDriversFromDB, ...driversInAttendance];
-
-    // 2. Combine Vehicles (DB active + Any vehicle used today)
-    const vehiclesInAttendanceRaw = attendanceToday.map(a => a.vehicle).filter(v => v);
-    const vehiclesInFuelRaw = fuelEntriesToday.map(f => f.vehicle).filter(v => v);
-    const seenVehicleIds = new Set(allVehicles.map(v => v._id.toString()));
-    const extraVehicles = [];
-
-    [...vehiclesInAttendanceRaw, ...vehiclesInFuelRaw].forEach(v => {
-        const vId = v._id ? v._id.toString() : v.toString();
-        if (!seenVehicleIds.has(vId)) {
-            extraVehicles.push(v);
-            seenVehicleIds.add(vId);
-        }
-    });
-
-    const combinedVehicles = [...allVehicles, ...extraVehicles];
-
-    const mappedDrivers = combinedDrivers.map(driver => {
-        const dId = driver._id?.toString();
-        const atts = attendanceToday.filter(a => {
-            if (!a.driver) return false;
-            const aDrId = (a.driver._id || a.driver).toString();
-            return aDrId === dId;
-        });
-
-        let status = 'Absent';
-        if (atts.some(a => a.status === 'incomplete')) status = 'Present';
-        else if (atts.some(a => a.status === 'completed')) status = 'Completed';
-        return { ...driver, attendances: atts, status };
-    });
-
-    const liveDriversFeed = mappedDrivers.filter(driver => driver.status !== 'Absent')
-        .sort((a, b) => {
-            // Priority 1: 'Present' (Active) above 'Completed'
-            if (a.status === 'Present' && b.status === 'Completed') return -1;
-            if (a.status === 'Completed' && b.status === 'Present') return 1;
-
-            if (a.status === 'Present') {
-                // For active drivers, show latest punch-in first
-                const aActive = a.attendances.find(att => att.status === 'incomplete');
-                const bActive = b.attendances.find(att => att.status === 'incomplete');
-                const aTime = aActive?.punchIn?.time || 0;
-                const bTime = bActive?.punchIn?.time || 0;
-                return new Date(bTime) - new Date(aTime);
-            }
-
-            // For completed drivers, show latest punch-out first
-            const aLastOut = a.attendances.filter(att => att.status === 'completed').sort((x, y) => new Date(y.punchOut?.time) - new Date(x.punchOut?.time))[0];
-            const bLastOut = b.attendances.filter(att => att.status === 'completed').sort((x, y) => new Date(y.punchOut?.time) - new Date(x.punchOut?.time))[0];
-            const aTime = aLastOut?.punchOut?.time || 0;
-            const bTime = bLastOut?.punchOut?.time || 0;
-            return new Date(bTime) - new Date(aTime);
-        });
-    const absentDriversFeed = mappedDrivers.filter(driver => driver.status === 'Absent' && driver.isFreelancer !== true);
-
-    // Stats Calculation
-    let regularSalaryTotal = 0;
-    let freelancerSalaryTotal = 0;
-    const regularDriversWithWageSeen = new Set();
-    const freelancerDriversSeen = new Set();
-    const regularDriversSeen = new Set();
-
-    attendanceToday.forEach(att => {
-        if (!att.driver) return;
-        const driverId = att.driver._id ? att.driver._id.toString() : att.driver.toString();
-        const isFreelancer = att.driver.isFreelancer === true || att.isFreelancer === true;
-
-        const bonuses = Math.max(
-            (Number(att.punchOut?.allowanceTA) || 0) + (Number(att.punchOut?.nightStayAmount) || 0),
-            Number(att.outsideTrip?.bonusAmount) || 0
-        );
-        const parking = att.punchOut?.parkingPaidBy !== 'Office' ? (Number(att.punchOut?.tollParkingAmount) || 0) : 0;
-        const wage = Number(att.dailyWage) || 0;
-
-        if (isFreelancer) {
-            freelancerSalaryTotal += (wage + bonuses + parking);
-            freelancerDriversSeen.add(driverId);
-        } else {
-            regularSalaryTotal += (bonuses + parking);
-            regularDriversSeen.add(driverId);
-            if (!regularDriversWithWageSeen.has(driverId)) {
-                regularSalaryTotal += wage;
-                regularDriversWithWageSeen.add(driverId);
+        const todayISTString = DateTime.now().setZone('Asia/Kolkata').toFormat('yyyy-MM-dd');
+        let targetDate = todayISTString;
+        if (date && typeof date === 'string' && date !== 'undefined' && date !== 'null' && date.trim()) {
+            const parsed = DateTime.fromISO(date.trim(), { zone: 'Asia/Kolkata' });
+            if (parsed.isValid) {
+                targetDate = parsed.toFormat('yyyy-MM-dd');
             }
         }
-    });
 
-    let outsideCarTotal = 0;
-    const attendanceVehicleIds = new Set(attendanceToday.map(a => (a.vehicle?._id || a.vehicle || '').toString()));
-    const validOutsideVehicles = (outsideVehiclesToday || []).filter(v => !attendanceVehicleIds.has(v._id.toString()));
-    validOutsideVehicles.forEach(v => { outsideCarTotal += (Number(v.dutyAmount) || 0); });
+        // 🔒 SECURE CONTEXT: Use session-based company ID with fallback
+        const scId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company || companyId;
+        if (!scId || !mongoose.Types.ObjectId.isValid(scId)) {
+            return res.status(403).json({ message: 'Unauthorized: Company context missing or invalid.' });
+        }
 
-    const allMappedVehicles = combinedVehicles.map(v => {
-        const vIdStr = v._id.toString();
-        const vehicleAtts = attendanceToday.filter(a => a.vehicle && (a.vehicle._id || a.vehicle).toString() === vIdStr);
-        const fuelH = fuelEntriesToday.filter(f => f.vehicle && (f.vehicle._id || f.vehicle).toString() === vIdStr);
+        const companyObjectId = new mongoose.Types.ObjectId(scId);
+        const cacheKey = `livefeed_${scId}_${targetDate}`;
 
-        const hasActive = vehicleAtts.some(a => a.status === 'incomplete');
-        const wasUsedToday = vehicleAtts.length > 0 || fuelH.length > 0;
+        console.log(`[LIVE_FEED_DEBUG] Co: ${scId}, Date: ${targetDate}, QueryDate: ${date}`);
 
-        return {
-            ...v,
-            status: hasActive ? 'In Use' : (wasUsedToday ? 'Used' : 'Idle'),
-            attendances: vehicleAtts,
-            fuelToday: fuelH,
-            fuelAmount: fuelH.reduce((s, f) => s + (Number(f.amount) || 0), 0)
+        // Explicitly allow manual refresh from the client
+        if (req.query.refresh === 'true') {
+            DASHBOARD_CACHE.delete(cacheKey);
+        }
+
+        if (DASHBOARD_CACHE.has(cacheKey)) {
+            const cached = DASHBOARD_CACHE.get(cacheKey);
+            if (Date.now() - cached.time < 30 * 1000) { // 30s cache for live feed
+                console.log(`[LIVE_FEED] Returning Cached Data for ${scId} - ${targetDate}`);
+                return res.json(cached.data);
+            }
+        }
+
+        // Use proper Date range for Fuel collection since it stores Date objects
+        const startDT = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
+        const endDT = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
+
+        const isToday = targetDate === todayISTString;
+        const attQuery = {
+            company: companyObjectId,
+            date: targetDate // Strictly show attendance for the target date only
         };
-    });
 
-    const liveVehiclesFeed = allMappedVehicles.filter(v => v.status !== 'Idle')
-        .sort((a, b) => {
-            // Priority: 'Used' before 'In Use' to show free/completed cars first as requested
-            if (a.status === 'Used' && b.status === 'In Use') return -1;
-            if (a.status === 'In Use' && b.status === 'Used') return 1;
+        const startOfDay = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).startOf('day').minus({ hours: 6 }).toJSDate();
+        const endOfDay = DateTime.fromISO(targetDate, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
 
-            if (a.status === 'Used' && b.status === 'Used') {
-                // Sort by punch-out time: earliest first
-                const aLastOut = a.attendances[a.attendances.length - 1]?.punchOut?.time || 0;
-                const bLastOut = b.attendances[b.attendances.length - 1]?.punchOut?.time || 0;
-                return new Date(aLastOut) - new Date(bLastOut);
+        // EXCLUDE 'deleted' and 'blocked' drivers explicitly
+        const [attendanceToday, fuelEntriesToday, totalVehiclesCount, allDriversFromDB, allVehicles, outsideVehiclesToday, drsDutiesToday] = await Promise.all([
+            Attendance.find(attQuery).populate('driver', 'name mobile isFreelancer salary dailyWage overtime').populate('vehicle', 'carNumber model').lean(),
+            Fuel.find({ company: companyObjectId, date: { $gte: startDT, $lte: endDT } }).populate('vehicle', 'carNumber').lean(),
+            Vehicle.countDocuments({ company: companyObjectId, isOutsideCar: { $ne: true }, status: 'active' }),
+            User.find({
+                company: companyObjectId,
+                role: 'Driver',
+                isFreelancer: { $ne: true },
+                status: { $in: ['active', 'Active', 'Present'] }
+            }).select('name mobile isFreelancer salary dailyWage overtime').lean(),
+            Vehicle.find({ company: companyObjectId, isOutsideCar: { $ne: true }, status: 'active' }).select('carNumber model status').lean(),
+            Vehicle.find({
+                company: companyObjectId,
+                isOutsideCar: true,
+                carNumber: { $regex: new RegExp(`#${targetDate}(#|$)`) }
+            }).lean(),
+            DRSDuty.find({
+                company: companyObjectId,
+                date: { $gte: startOfDay, $lte: endOfDay }
+            }).lean()
+        ]);
+        console.log(`[LIVE_FEED_QUERY] Att: ${attendanceToday.length}, Fuel: ${fuelEntriesToday.length}, Drivers: ${allDriversFromDB.length}, Vehicles: ${allVehicles.length}, DRS: ${drsDutiesToday.length}`);
+
+        // Enrich attendance records with Guest Name & Duty info from DRS Duty or Attendance fields
+        attendanceToday.forEach(att => {
+            if (!att) return;
+            let guest = att.guestName || '';
+            let dutyText = att.punchOut?.remarks || att.dutyType || '';
+            let hotel = att.hotel || '';
+            let bkgCode = '';
+
+            const drvId = (att.driver?._id || att.driver || '').toString();
+            const drvName = (att.driver?.name || '').toLowerCase().trim();
+            const vehId = (att.vehicle?._id || att.vehicle || '').toString();
+            const vehNum = (att.vehicle?.carNumber || '').replace(/[^0-9]/g, '');
+
+            const matched = drsDutiesToday.find(d => {
+                if (!d) return false;
+                const dDrvId = (d.driver?._id || d.driver || '').toString();
+                const dVehId = (d.vehicle?._id || d.vehicle || '').toString();
+                const dDrvName = (d.customDriverName || '').toLowerCase().trim();
+                const dVehNum = (d.customCarNumber || '').replace(/[^0-9]/g, '');
+
+                const driverMatch = (dDrvId && drvId && dDrvId === drvId) || (dDrvName && drvName && (dDrvName === drvName || dDrvName.includes(drvName) || drvName.includes(dDrvName)));
+                const vehMatch = (dVehId && vehId && dVehId === vehId) || (dVehNum && vehNum && (dVehNum === vehNum || dVehNum.includes(vehNum) || vehNum.includes(dVehNum)));
+                return driverMatch || vehMatch;
+            });
+
+            if (matched) {
+                if (!guest) guest = matched.clientName || '';
+                if (!dutyText) dutyText = matched.duty || matched.itinerary || '';
+                if (!hotel) hotel = matched.hotel || matched.pickupPoint || '';
+                bkgCode = matched.bookingId || '';
             }
 
-            // Secondary sort for 'In Use': Latest punch-in first (active ones)
-            const aLastTime = a.attendances[a.attendances.length - 1]?.punchIn?.time || 0;
-            const bLastTime = b.attendances[b.attendances.length - 1]?.punchIn?.time || 0;
-            return new Date(bLastTime) - new Date(aLastTime);
+            att.guestName = guest;
+            att.dutyDetails = dutyText;
+            att.hotelName = hotel;
+            att.bookingCode = bkgCode;
         });
-    const unusedVehiclesFeed = allMappedVehicles.filter(v => v.status === 'Idle');
 
-    const finalResponse = {
-        date: targetDate,
-        totalVehicles: totalVehiclesCount,
-        activeVehiclesCount: liveVehiclesFeed.filter(v => v.status === 'In Use').length,
-        totalUsedVehiclesCount: liveVehiclesFeed.length,
-        unusedVehiclesCount: unusedVehiclesFeed.length,
-        absentDriversCount: absentDriversFeed.length,
-        dailyFuelAmount: { total: fuelEntriesToday.reduce((sum, f) => sum + (Number(f.amount) || 0), 0) },
-        dailyStats: {
-            regularSalary: regularSalaryTotal,
-            regularDriversCount: regularDriversSeen.size,
-            freelancerSalary: freelancerSalaryTotal,
-            freelancerDriversCount: freelancerDriversSeen.size,
-            outsideCarSalary: outsideCarTotal,
-            grandTotal: regularSalaryTotal + freelancerSalaryTotal
-        },
-        liveDriversFeed,
-        absentDriversFeed,
-        liveVehiclesFeed,
-        unusedVehiclesFeed,
-        dailyFuelEntries: fuelEntriesToday,
-        lastUpdated: new Date().toISOString()
-    };
+        // 1. Combine Drivers (DB active + Anyone who worked today)
+        const driversInAttendanceRaw = attendanceToday.map(a => a?.driver).filter(Boolean);
+        const seenDriverIds = new Set(allDriversFromDB.map(df => (df._id || df).toString()));
+        const driversInAttendance = [];
 
-    console.log(`[LIVE_FEED] Company: ${companyId}, Date: ${targetDate}, Active Fleet: ${finalResponse.activeVehiclesCount}/${finalResponse.totalVehicles}, Drivers: ${liveDriversFeed.length}`);
+        driversInAttendanceRaw.forEach(d => {
+            const dId = (d._id || d).toString();
+            if (dId && !seenDriverIds.has(dId)) {
+                driversInAttendance.push(d);
+                seenDriverIds.add(dId);
+            }
+        });
 
-    DASHBOARD_CACHE.set(cacheKey, { data: finalResponse, time: Date.now() });
-    res.json(finalResponse);
+        const combinedDrivers = [...allDriversFromDB, ...driversInAttendance];
+
+        // 2. Combine Vehicles (DB active + Any vehicle used today)
+        const vehiclesInAttendanceRaw = attendanceToday.map(a => a?.vehicle).filter(Boolean);
+        const vehiclesInFuelRaw = fuelEntriesToday.map(f => f?.vehicle).filter(Boolean);
+        const seenVehicleIds = new Set(allVehicles.map(v => (v._id || v).toString()));
+        const extraVehicles = [];
+
+        [...vehiclesInAttendanceRaw, ...vehiclesInFuelRaw].forEach(v => {
+            const vId = (v._id || v).toString();
+            if (vId && !seenVehicleIds.has(vId)) {
+                extraVehicles.push(v);
+                seenVehicleIds.add(vId);
+            }
+        });
+
+        const combinedVehicles = [...allVehicles, ...extraVehicles];
+
+        const mappedDrivers = combinedDrivers.map(driver => {
+            const dId = (driver._id || driver)?.toString();
+            const atts = attendanceToday.filter(a => {
+                if (!a || !a.driver) return false;
+                const aDrId = (a.driver._id || a.driver).toString();
+                return aDrId === dId;
+            });
+
+            let status = 'Absent';
+            if (atts.some(a => a.status === 'incomplete')) status = 'Present';
+            else if (atts.some(a => a.status === 'completed')) status = 'Completed';
+            return { ...(typeof driver === 'object' ? driver : { _id: driver }), attendances: atts, status };
+        });
+
+        const liveDriversFeed = mappedDrivers.filter(driver => driver.status !== 'Absent')
+            .sort((a, b) => {
+                // Priority 1: 'Present' (Active) above 'Completed'
+                if (a.status === 'Present' && b.status === 'Completed') return -1;
+                if (a.status === 'Completed' && b.status === 'Present') return 1;
+
+                if (a.status === 'Present') {
+                    // For active drivers, show latest punch-in first
+                    const aActive = a.attendances.find(att => att.status === 'incomplete');
+                    const bActive = b.attendances.find(att => att.status === 'incomplete');
+                    const aTime = aActive?.punchIn?.time || 0;
+                    const bTime = bActive?.punchIn?.time || 0;
+                    return new Date(bTime) - new Date(aTime);
+                }
+
+                // For completed drivers, show latest punch-out first
+                const aLastOut = a.attendances.filter(att => att.status === 'completed').sort((x, y) => new Date(y.punchOut?.time) - new Date(x.punchOut?.time))[0];
+                const bLastOut = b.attendances.filter(att => att.status === 'completed').sort((x, y) => new Date(y.punchOut?.time) - new Date(x.punchOut?.time))[0];
+                const aTime = aLastOut?.punchOut?.time || 0;
+                const bTime = bLastOut?.punchOut?.time || 0;
+                return new Date(bTime) - new Date(aTime);
+            });
+        const absentDriversFeed = mappedDrivers.filter(driver => driver.status === 'Absent' && driver.isFreelancer !== true);
+
+        // Stats Calculation
+        let regularSalaryTotal = 0;
+        let freelancerSalaryTotal = 0;
+        const regularDriversWithWageSeen = new Set();
+        const freelancerDriversSeen = new Set();
+        const regularDriversSeen = new Set();
+
+        attendanceToday.forEach(att => {
+            if (!att || !att.driver) return;
+            const driverId = (att.driver._id || att.driver).toString();
+            const isFreelancer = att.driver.isFreelancer === true || att.isFreelancer === true;
+
+            const bonuses = Math.max(
+                (Number(att.punchOut?.allowanceTA) || 0) + (Number(att.punchOut?.nightStayAmount) || 0),
+                Number(att.outsideTrip?.bonusAmount) || 0
+            );
+            const parking = att.punchOut?.parkingPaidBy !== 'Office' ? (Number(att.punchOut?.tollParkingAmount) || 0) : 0;
+            const wage = Number(att.dailyWage) || 0;
+
+            if (isFreelancer) {
+                freelancerSalaryTotal += (wage + bonuses + parking);
+                freelancerDriversSeen.add(driverId);
+            } else {
+                regularSalaryTotal += (bonuses + parking);
+                regularDriversSeen.add(driverId);
+                if (!regularDriversWithWageSeen.has(driverId)) {
+                    regularSalaryTotal += wage;
+                    regularDriversWithWageSeen.add(driverId);
+                }
+            }
+        });
+
+        let outsideCarTotal = 0;
+        const attendanceVehicleIds = new Set(attendanceToday.map(a => (a?.vehicle?._id || a?.vehicle || '').toString()).filter(Boolean));
+        const validOutsideVehicles = (outsideVehiclesToday || []).filter(v => v && !attendanceVehicleIds.has((v._id || v).toString()));
+        validOutsideVehicles.forEach(v => { outsideCarTotal += (Number(v.dutyAmount) || 0); });
+
+        const allMappedVehicles = combinedVehicles.map(v => {
+            const vIdStr = (v._id || v).toString();
+            const vehicleAtts = attendanceToday.filter(a => a && a.vehicle && (a.vehicle._id || a.vehicle).toString() === vIdStr);
+            const fuelH = fuelEntriesToday.filter(f => f && f.vehicle && (f.vehicle._id || f.vehicle).toString() === vIdStr);
+
+            const hasActive = vehicleAtts.some(a => a.status === 'incomplete');
+            const wasUsedToday = vehicleAtts.length > 0 || fuelH.length > 0;
+
+            return {
+                ...(typeof v === 'object' ? v : { _id: v }),
+                status: hasActive ? 'In Use' : (wasUsedToday ? 'Used' : 'Idle'),
+                attendances: vehicleAtts,
+                fuelToday: fuelH,
+                fuelAmount: fuelH.reduce((s, f) => s + (Number(f.amount) || 0), 0)
+            };
+        });
+
+        const liveVehiclesFeed = allMappedVehicles.filter(v => v.status !== 'Idle')
+            .sort((a, b) => {
+                // Priority: 'Used' before 'In Use' to show free/completed cars first as requested
+                if (a.status === 'Used' && b.status === 'In Use') return -1;
+                if (a.status === 'In Use' && b.status === 'Used') return 1;
+
+                if (a.status === 'Used' && b.status === 'Used') {
+                    // Sort by punch-out time: earliest first
+                    const aLastOut = a.attendances?.[a.attendances.length - 1]?.punchOut?.time || 0;
+                    const bLastOut = b.attendances?.[b.attendances.length - 1]?.punchOut?.time || 0;
+                    return new Date(aLastOut) - new Date(bLastOut);
+                }
+
+                // Secondary sort for 'In Use': Latest punch-in first (active ones)
+                const aLastTime = a.attendances?.[a.attendances.length - 1]?.punchIn?.time || 0;
+                const bLastTime = b.attendances?.[b.attendances.length - 1]?.punchIn?.time || 0;
+                return new Date(bLastTime) - new Date(aLastTime);
+            });
+        const unusedVehiclesFeed = allMappedVehicles.filter(v => v.status === 'Idle');
+
+        const finalResponse = {
+            date: targetDate,
+            totalVehicles: totalVehiclesCount,
+            activeVehiclesCount: liveVehiclesFeed.filter(v => v.status === 'In Use').length,
+            totalUsedVehiclesCount: liveVehiclesFeed.length,
+            unusedVehiclesCount: unusedVehiclesFeed.length,
+            absentDriversCount: absentDriversFeed.length,
+            dailyFuelAmount: { total: fuelEntriesToday.reduce((sum, f) => sum + (Number(f.amount) || 0), 0) },
+            dailyStats: {
+                regularSalary: regularSalaryTotal,
+                regularDriversCount: regularDriversSeen.size,
+                freelancerSalary: freelancerSalaryTotal,
+                freelancerDriversCount: freelancerDriversSeen.size,
+                outsideCarSalary: outsideCarTotal,
+                grandTotal: regularSalaryTotal + freelancerSalaryTotal
+            },
+            liveDriversFeed,
+            absentDriversFeed,
+            liveVehiclesFeed,
+            unusedVehiclesFeed,
+            dailyFuelEntries: fuelEntriesToday,
+            lastUpdated: new Date().toISOString()
+        };
+
+        console.log(`[LIVE_FEED] Company: ${companyId}, Date: ${targetDate}, Active Fleet: ${finalResponse.activeVehiclesCount}/${finalResponse.totalVehicles}, Drivers: ${liveDriversFeed.length}`);
+
+        DASHBOARD_CACHE.set(cacheKey, { data: finalResponse, time: Date.now() });
+        res.json(finalResponse);
+    } catch (err) {
+        console.error(`[LIVE_FEED_ERROR] Company: ${req.params?.companyId}, Query:`, req.query, err);
+        res.status(500).json({ message: 'Error retrieving live feed: ' + (err.message || 'Server error') });
+    }
 });
 
 const getAllLoans = asyncHandler(async (req, res) => {
