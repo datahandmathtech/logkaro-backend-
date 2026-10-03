@@ -4441,7 +4441,7 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
             
         } else if (expense.type === 'fuel') {
             // Optional overrides from Admin
-            const { amount, quantity, rate, slipPhoto, paymentSource, paymentBy } = req.body;
+            const { amount, quantity, rate, slipPhoto, paymentSource, paymentBy, date } = req.body;
             let finalOdometer = Number(req.body.odometer || expense.km || 0);
             let finalAmount = Number(amount || expense.amount || 0);
             // Use admin override OR driver's submitted quantity. Default to 1 to avoid validation error.
@@ -4459,10 +4459,11 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
             
             // PaymentBy (Guest name / Office Payer name)
             const finalPaymentBy = paymentBy !== undefined ? paymentBy : (expense.paymentBy || '');
-            const finalClient = req.body.updates?.client || null;
-            const finalDrsDuty = req.body.updates?.drsDuty || null;
+            const finalClient = req.body.client || req.body.updates?.client || null;
+            const finalDrsDuty = req.body.drsDuty || req.body.updates?.drsDuty || null;
+            const finalDate = date ? new Date(date) : (attendance.date ? new Date(attendance.date) : (expense.createdAt || new Date()));
 
-            console.log(`[approveRejectExpense] Creating fuel entry: vehicleId=${vehicleId}, amount=${finalAmount}, qty=${finalQuantity}, rate=${finalRate}, odometer=${finalOdometer}, paymentSource=${finalPaymentSource}, paymentBy=${finalPaymentBy}, client=${finalClient}`);
+            console.log(`[approveRejectExpense] Creating fuel entry: vehicleId=${vehicleId}, date=${finalDate}, amount=${finalAmount}, qty=${finalQuantity}, rate=${finalRate}, odometer=${finalOdometer}, paymentSource=${finalPaymentSource}, paymentBy=${finalPaymentBy}, client=${finalClient}, drsDuty=${finalDrsDuty}`);
 
             // Dedup check: If admin already entered this fuel manually via Reports or Fuel page
             const existingFuel = await Fuel.findOne({
@@ -4480,8 +4481,15 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
                 console.log(`[approveRejectExpense] Fuel record already exists (Deduplicated): ${existingFuel._id}`);
                 if (!existingFuel.attendance) {
                     existingFuel.attendance = attendanceId;
-                    await existingFuel.save();
                 }
+                if (date) {
+                    existingFuel.date = finalDate;
+                }
+                if (finalClient) existingFuel.client = finalClient;
+                if (finalDrsDuty) existingFuel.drsDuty = finalDrsDuty;
+                if (finalPaymentSource) existingFuel.paymentSource = finalPaymentSource;
+                if (finalPaymentBy) existingFuel.paymentBy = finalPaymentBy;
+                await existingFuel.save();
                 fuelEntry = existingFuel;
             } else {
                 // 1. Add to Fuel Collection
@@ -4489,7 +4497,7 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
                     vehicle: vehicleId,
                     company: attendance.company,
                     fuelType: expense.fuelType || 'Diesel',
-                    date: attendance.date ? new Date(attendance.date) : (expense.createdAt || new Date()),
+                    date: finalDate,
                     amount: finalAmount,
                     quantity: finalQuantity,
                     rate: finalRate,
@@ -4518,7 +4526,7 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
                         sourceId: fuelEntry._id,
                         sourceType: 'Fuel',
                         amount: finalAmount,
-                        date: attendance.date ? new Date(attendance.date) : (expense.createdAt || new Date()),
+                        date: finalDate,
                         paymentMode: req.body.paymentMode || 'Cash',
                         bankAccountId: req.body.bankAccountId || null,
                         type: 'OUT',
@@ -4560,7 +4568,7 @@ const approveRejectExpense = asyncHandler(async (req, res) => {
                 company: attendance.company,
                 driver: driverName,
                 driverId: driverId,
-                date: attendance.date ? new Date(attendance.date) : (expense.createdAt || new Date()),
+                date: req.body.date ? new Date(req.body.date) : (attendance.date ? new Date(attendance.date) : (expense.createdAt || new Date())),
                 amount: finalAmount,
                 source: 'Driver',
                 receiptPhoto: finalSlipPhoto,

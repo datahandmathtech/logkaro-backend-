@@ -245,8 +245,8 @@ router.post('/upload', adminOrExecutive, upload.single('file'), (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: 'No file uploaded' });
     }
-    const webPath = `/uploads/attendance/${req.file.filename}`;
-    res.json({ url: webPath });
+    const fileUrl = req.file.path || req.file.secure_url || req.file.url || `/uploads/attendance/${req.file.filename}`;
+    res.json({ url: fileUrl, filename: req.file.filename });
 });
 
 router.post('/manual-duty', adminOrExecutive, checkCompany, addManualDuty);

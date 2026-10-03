@@ -115,6 +115,20 @@ const uploadsPath = path.resolve(__dirname, '../uploads');
 if (!fs.existsSync(uploadsPath)) {
     fs.mkdirSync(uploadsPath, { recursive: true });
 }
+// Redirect legacy or misrouted Cloudinary uploads
+app.get('/uploads/attendance/taxi-fleet-crm/*', (req, res) => {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 'doaymwjki';
+    const subPath = req.params[0];
+    const cloudinaryUrl = `https://res.cloudinary.com/${cloudName}/image/upload/taxi-fleet-crm/${subPath}`;
+    return res.redirect(cloudinaryUrl);
+});
+app.get('/uploads/taxi-fleet-crm/*', (req, res) => {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 'doaymwjki';
+    const subPath = req.params[0];
+    const cloudinaryUrl = `https://res.cloudinary.com/${cloudName}/image/upload/taxi-fleet-crm/${subPath}`;
+    return res.redirect(cloudinaryUrl);
+});
+
 app.use('/uploads', express.static(uploadsPath, { maxAge: '7d' }));
 
 // Serve static assets (JS, CSS) with long-term caching
