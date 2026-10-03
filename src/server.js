@@ -1,5 +1,5 @@
 const express = require('express');
-console.log('Backend starting - Updated Feb 10 with Property Hub and Maintenance');
+console.log('Backend starting - Updated Oct 3 with Fuel Date Edit and Leads Breakdown');
 const dotenv = require('dotenv');
 // Version: 1.0.5 - Enhanced Logging
 const path = require('path');
