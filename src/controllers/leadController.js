@@ -25,6 +25,36 @@ const getNextClientCodePreview = asyncHandler(async (req, res) => {
 // @access  Private/AdminOrExecutive
 const getLeads = asyncHandler(async (req, res) => {
     const { status, search, month, salesPerson, source } = req.query;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Auto-cancel past unconfirmed leads where tour date has already ended
+    try {
+        await Lead.updateMany(
+            {
+                company: req.params.companyId,
+                status: { $nin: ['Confirmed', 'Cancelled', 'Lost'] },
+                bookingId: null,
+                $or: [
+                    { travelEndDate: { $lt: today } },
+                    { travelEndDate: null, travelStartDate: { $lt: today } }
+                ]
+            },
+            {
+                $set: { status: 'Cancelled' },
+                $push: {
+                    remarksHistory: {
+                        text: 'Tour date passed without confirmation (Auto-cancelled)',
+                        date: new Date()
+                    }
+                }
+            }
+        );
+    } catch (e) {
+        console.error('Error auto-cancelling expired leads:', e);
+    }
+
     let query = { company: req.params.companyId };
 
     if (status && status !== 'All') {
@@ -191,7 +221,20 @@ const createLead = asyncHandler(async (req, res) => {
         gstMode: gstMode || 'GST Inclusive',
         gstRate: Number(gstRate) || 5,
         priority: priority || 'Unassigned',
-        status: 'New',
+        status: (() => {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const end = travelEndDate ? new Date(travelEndDate) : (travelStartDate ? new Date(travelStartDate) : null);
+            if (end) end.setHours(23, 59, 59, 999);
+            return (end && end < now) ? 'Cancelled' : 'New';
+        })(),
+        remarksHistory: (() => {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const end = travelEndDate ? new Date(travelEndDate) : (travelStartDate ? new Date(travelStartDate) : null);
+            if (end) end.setHours(23, 59, 59, 999);
+            return (end && end < now) ? [{ text: 'Tour date passed without confirmation (Auto-cancelled)', date: new Date() }] : [];
+        })(),
         notes,
         specialRemarks: specialRemarks || '',
         inclusions: inclusions || {
