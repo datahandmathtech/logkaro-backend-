@@ -29,13 +29,14 @@ const getLeads = asyncHandler(async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Auto-cancel past unconfirmed leads where tour date has already ended
+    // Auto-cancel past unconfirmed leads where tour date has already ended (exclude manually restored ones)
     try {
         await Lead.updateMany(
             {
                 company: req.params.companyId,
                 status: { $nin: ['Confirmed', 'Cancelled', 'Lost'] },
                 bookingId: null,
+                notes: { $not: /Restored from Lost/i },
                 $or: [
                     { travelEndDate: { $lt: today } },
                     { travelEndDate: null, travelStartDate: { $lt: today } }
@@ -262,8 +263,10 @@ const updateLead = asyncHandler(async (req, res) => {
 
     // Clean empty strings for ObjectId fields to prevent CastError
     ['travelAgent', 'salesUser', 'bookingRef'].forEach(field => {
-        if (req.body[field] === '' || req.body[field] === 'null' || !req.body[field]) {
-            req.body[field] = null;
+        if (field in req.body) {
+            if (req.body[field] === '' || req.body[field] === 'null' || !req.body[field]) {
+                req.body[field] = null;
+            }
         }
     });
 
