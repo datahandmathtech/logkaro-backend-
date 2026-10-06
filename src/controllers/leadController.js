@@ -24,7 +24,7 @@ const getNextClientCodePreview = asyncHandler(async (req, res) => {
 // @route   GET /api/leads/:companyId
 // @access  Private/AdminOrExecutive
 const getLeads = asyncHandler(async (req, res) => {
-    const { status, search, month, salesPerson, source } = req.query;
+    const { status, search, month, salesPerson, source, fy } = req.query;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -105,6 +105,24 @@ const getLeads = asyncHandler(async (req, res) => {
             if (isNaN(d.getTime())) return false;
             const m = String(d.getMonth() + 1).padStart(2, '0');
             return m === mStr;
+        });
+    }
+
+    // Financial Year filter (e.g. 'FY 26-27', 'FY 27-28')
+    if (fy && fy !== 'All FY') {
+        leads = leads.filter(lead => {
+            const travelDate = lead.travelStartDate || lead.leadDate || lead.createdAt;
+            if (!travelDate) return false;
+            const d = new Date(travelDate);
+            if (isNaN(d.getTime())) return false;
+            // IST offset (+5.5 hours)
+            const istDate = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+            const y = istDate.getUTCFullYear();
+            const m = istDate.getUTCMonth();
+            const startYear = m >= 3 ? y : y - 1;
+            const endYear = startYear + 1;
+            const leadFy = `FY ${String(startYear).slice(-2)}-${String(endYear).slice(-2)}`;
+            return leadFy === fy;
         });
     }
 
