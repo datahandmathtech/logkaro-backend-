@@ -94,7 +94,9 @@ const updateBooking = asyncHandler(async (req, res) => {
     const { 
         bookingStatus, paymentStatus, notes, termsAndConditions,
         vehicleType, totalAmount, travelStartDate, travelEndDate,
-        pickupLocation, dropLocation, itinerary, adminOverride, advancePaid
+        pickupLocation, dropLocation, itinerary, adminOverride, advancePaid,
+        clientName, mobileNumber, alternateMobile, email, gstin,
+        source, salesPerson, bookingReference, vehicleMatrix
     } = req.body;
 
     if (bookingStatus) booking.bookingStatus = bookingStatus;
@@ -110,8 +112,24 @@ const updateBooking = asyncHandler(async (req, res) => {
     if (pickupLocation !== undefined) booking.pickupLocation = pickupLocation;
     if (dropLocation !== undefined) booking.dropLocation = dropLocation;
     
+    // Client Info fields
+    if (clientName !== undefined) booking.clientName = clientName;
+    if (mobileNumber !== undefined) booking.mobileNumber = mobileNumber;
+    if (alternateMobile !== undefined) booking.alternateMobile = alternateMobile;
+    if (email !== undefined) booking.email = email;
+    if (gstin !== undefined) booking.gstin = gstin;
+
+    // Sales Info fields
+    if (source !== undefined) booking.source = source;
+    if (salesPerson !== undefined) booking.salesPerson = salesPerson;
+    if (bookingReference !== undefined) booking.bookingReference = bookingReference;
+
     if (itinerary) {
         booking.itinerary = itinerary;
+    }
+
+    if (vehicleMatrix) {
+        booking.vehicleMatrix = vehicleMatrix;
     }
 
     // Recalculate balance
@@ -332,13 +350,10 @@ const cancelBooking = asyncHandler(async (req, res) => {
 
     const retainedAmount = advancePaid - refund;
     
+    booking.bookingStatus = 'Cancelled';
     if (retainedAmount > 0) {
-        // If money is retained, move to Completed (for Tax Invoice processing)
-        booking.bookingStatus = 'Completed';
         booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled (Retained ₹${retainedAmount}): ${reason || 'Customer request'}`;
     } else {
-        // Full refund or no advance, move to Cancelled (Lost)
-        booking.bookingStatus = 'Cancelled';
         booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled (Fully Refunded): ${reason || 'Customer request'}`;
         
         // Remove ledger entries as per request: "no account ledger will show there"
@@ -354,6 +369,30 @@ const cancelBooking = asyncHandler(async (req, res) => {
             { _id: { $in: booking.drsDuties } },
             { $set: { status: 'Cancelled' } }
         );
+    }
+
+    // Sync with linked Lead so Leads table and Conversions stats stay strictly accurate
+    try {
+        const Lead = require('../models/Lead');
+        await Lead.updateMany(
+            {
+                $or: [
+                    { bookingRef: booking._id },
+                    { bookingId: booking.bookingCode },
+                    { bookingId: booking.bookingId },
+                    { clientCode: booking.bookingCode },
+                    { clientCode: booking.bookingId }
+                ]
+            },
+            {
+                $set: {
+                    status: 'Cancelled',
+                    notes: `Booking Cancelled: ${reason || 'Customer request'}`
+                }
+            }
+        );
+    } catch (leadSyncErr) {
+        console.error('Error syncing cancelled lead:', leadSyncErr);
     }
     
     // Save booking

@@ -24,7 +24,7 @@ const getNextClientCodePreview = asyncHandler(async (req, res) => {
 // @route   GET /api/leads/:companyId
 // @access  Private/AdminOrExecutive
 const getLeads = asyncHandler(async (req, res) => {
-    const { status, search, month, salesPerson, source, fy } = req.query;
+    const { status, search, month, salesPerson, source, fy, dateType } = req.query;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -91,20 +91,47 @@ const getLeads = asyncHandler(async (req, res) => {
             'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
         };
         const mStr = MONTH_MAP[month] || month;
+        const mNumStr = String(parseInt(mStr, 10));
+
         leads = leads.filter(lead => {
-            // Travel month is determined by travelStartDate (fallback to leadDate / createdAt)
-            const travelDate = lead.travelStartDate || lead.leadDate || lead.createdAt;
-            if (!travelDate) return false;
-            if (typeof travelDate === 'string' && travelDate.includes('-')) {
-                const parts = travelDate.split('T')[0].split('-');
-                if (parts.length >= 2) {
-                    return parts[1] === mStr;
+            const isMatchMonth = (rawDate) => {
+                if (!rawDate) return false;
+                if (typeof rawDate === 'string' && rawDate.includes('-')) {
+                    const parts = rawDate.split('T')[0].split('-');
+                    if (parts.length >= 2) {
+                        return parts[1] === mStr;
+                    }
                 }
+                const d = new Date(rawDate);
+                if (isNaN(d.getTime())) return false;
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                return m === mStr;
+            };
+
+            if (dateType === 'travel') {
+                // Filter strictly by Travel Tour Date
+                return isMatchMonth(lead.travelStartDate);
             }
-            const d = new Date(travelDate);
-            if (isNaN(d.getTime())) return false;
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            return m === mStr;
+
+            // 1. Tour Travel Date: If tour travels in this month (e.g. advance bookings for Nov, Dec, Jan...)
+            if (isMatchMonth(lead.travelStartDate)) {
+                return true;
+            }
+
+            // 2. Client Code prefix: If enquiry arrived in this month (e.g. "10/01" -> Oct, "11/01" -> Nov, "09/01" -> Sep)
+            const code = String(lead.clientCode || lead.leadId || '').trim();
+            const codeMatch = code.match(/^(\d{1,2})\//);
+            if (codeMatch) {
+                const codeMonth = String(parseInt(codeMatch[1], 10)).padStart(2, '0');
+                if (codeMonth === mStr) return true;
+            }
+
+            // 3. Fallback for leads without MM/SS clientCode: use leadDate (Enquiry date)
+            if (lead.leadDate && isMatchMonth(lead.leadDate)) {
+                return true;
+            }
+
+            return false;
         });
     }
 

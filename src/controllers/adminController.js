@@ -4630,6 +4630,11 @@ const addAdvance = asyncHandler(async (req, res) => {
     const effectivePaidBy = paidBy || (givenBy === 'Guest' ? 'Guest' : 'Company');
     const numAmount = Number(amount);
 
+    const advDate = date ? new Date(date) : new Date();
+    const effectiveMonth = month ? parseInt(month, 10) : (advDate.getMonth() + 1);
+    const effectiveYear = year ? parseInt(year, 10) : advDate.getFullYear();
+    const resolvedPaymentMode = paymentMode || (effectivePaidBy === 'Guest' ? 'Cash by Guest' : (bankAccountId ? 'Bank Transfer' : 'Cash'));
+
     const advanceData = {
         company: companyId,
         amount: numAmount,
@@ -4640,10 +4645,10 @@ const addAdvance = asyncHandler(async (req, res) => {
         advanceType: advanceType || (effectivePaidBy === 'Guest' ? 'Guest' : 'Office'),
         givenBy: effectivePaidBy === 'Guest' ? 'Guest' : (givenBy || 'Office'),
         paidBy: effectivePaidBy,
-        month: month ? parseInt(month) : undefined,
-        year: year ? parseInt(year) : undefined,
+        month: effectiveMonth,
+        year: effectiveYear,
         isStaffAdvance: !!isStaffAdvance,
-        paymentMode: paymentMode || (effectivePaidBy === 'Guest' ? 'Cash by Guest' : 'Bank Transfer'),
+        paymentMode: resolvedPaymentMode,
         paymentReference: paymentReference || '',
         guestName: guestName || '',
         bookingId: bookingId || '',
@@ -4663,17 +4668,20 @@ const addAdvance = asyncHandler(async (req, res) => {
 
     // 1. If By Company: Deduct from Cash in Hand or Bank Account
     if (effectivePaidBy === 'Company') {
+        const MONTH_MAP = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthLabel = MONTH_MAP[effectiveMonth - 1] || effectiveMonth;
+
         await recordFinancialTransaction({
             companyId,
             sourceId: advance._id,
             sourceType: 'Advance',
             amount: numAmount,
             date: date || advance.date,
-            paymentMode,
+            paymentMode: resolvedPaymentMode,
             bankAccountId: bankAccountId || null,
             type: 'OUT',
             category: isStaffAdvance ? 'Staff Advance' : 'Driver Advance',
-            description: `Advance given to ${isStaffAdvance ? 'Staff' : 'Driver'} ${recipient.name} - ${remark || ''}`,
+            description: `Advance given to ${isStaffAdvance ? 'Staff' : 'Driver'} ${recipient.name} (${monthLabel} ${effectiveYear} Hisab) - ${remark || ''}`,
             driverRef: !isStaffAdvance ? recipient._id : null,
             driverName: !isStaffAdvance ? recipient.name : '',
             reference: paymentReference || '',
@@ -4892,12 +4900,18 @@ const updateAdvance = asyncHandler(async (req, res) => {
     if (advance) {
         if (amount !== undefined) advance.amount = Number(amount);
         if (remark !== undefined) advance.remark = remark;
-        if (date !== undefined) {
-            advance.date = date;
-            const parsedDate = new Date(date);
-            advance.month = parsedDate.getMonth() + 1;
-            advance.year = parsedDate.getFullYear();
+        if (date !== undefined) advance.date = date;
+        if (month !== undefined) {
+            advance.month = parseInt(month, 10);
+        } else if (date !== undefined && !advance.month) {
+            advance.month = new Date(date).getMonth() + 1;
         }
+        if (year !== undefined) {
+            advance.year = parseInt(year, 10);
+        } else if (date !== undefined && !advance.year) {
+            advance.year = new Date(date).getFullYear();
+        }
+
         if (advanceType !== undefined) advance.advanceType = advanceType;
         if (givenBy !== undefined) advance.givenBy = givenBy;
         if (paidBy !== undefined) advance.paidBy = paidBy;
@@ -4917,13 +4931,14 @@ const updateAdvance = asyncHandler(async (req, res) => {
             advance.driver = undefined;
             advance.isStaffAdvance = true;
         }
-        if (month !== undefined) advance.month = parseInt(month);
-        if (year !== undefined) advance.year = parseInt(year);
         if (isStaffAdvance !== undefined) advance.isStaffAdvance = !!isStaffAdvance;
 
         const updatedAdvance = await advance.save();
 
         const isStaff = updatedAdvance.isStaffAdvance || !!updatedAdvance.staff;
+        const MONTH_MAP = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthLabel = MONTH_MAP[(updatedAdvance.month || 1) - 1] || updatedAdvance.month;
+
         await updateFinancialTransaction({
             companyId: updatedAdvance.company,
             sourceId: updatedAdvance._id,
@@ -4934,7 +4949,7 @@ const updateAdvance = asyncHandler(async (req, res) => {
             bankAccountId: updatedAdvance.paidBy === 'Company' ? updatedAdvance.bankAccount : null,
             type: 'OUT',
             category: isStaff ? 'Staff Advance' : 'Driver Advance',
-            description: `Advance given to ${isStaff ? 'Staff' : 'Driver'} - ${updatedAdvance.remark || ''}`,
+            description: `Advance given to ${isStaff ? 'Staff' : 'Driver'} (${monthLabel} ${updatedAdvance.year || ''} Hisab) - ${updatedAdvance.remark || ''}`,
             driverRef: updatedAdvance.driver || updatedAdvance.staff || null,
             reference: updatedAdvance.paymentReference || '',
             user: req.user?._id,
@@ -5149,7 +5164,16 @@ const getDriverSalarySummaryInternal = async (companyId, month, year, isFreelanc
     const advanceQuery = {
         driver: { $in: driverIds }
     };
-    if (startJS) advanceQuery.date = { $gte: startJS, $lte: endJS };
+    if (month && year) {
+        const m = parseInt(month, 10);
+        const y = parseInt(year, 10);
+        advanceQuery.$or = [
+            { month: m, year: y },
+            { month: { $exists: false }, date: { $gte: startJS, $lte: endJS } }
+        ];
+    } else if (startJS) {
+        advanceQuery.date = { $gte: startJS, $lte: endJS };
+    }
     advanceQuery.remark = { $not: /Auto Generated|Daily Salary|Manual Duty Salary|Freelancer Daily Salary/ };
 
     const parkingQuery = {
