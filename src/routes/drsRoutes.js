@@ -8,7 +8,15 @@ const {
     getDRSDutiesByVehicle,
     collectDRSPayment
 } = require('../controllers/drsController');
+const {
+    syncFromSheetWebhook,
+    getSheetData
+} = require('../controllers/drsSyncController');
 const { adminOrExecutive, checkCompany, protect } = require('../middleware/authMiddleware');
+
+// Public Webhook endpoint for Google Apps Script
+router.post('/sync/sheet-webhook', syncFromSheetWebhook);
+router.get('/sync/sheet-data/:companyId', getSheetData);
 
 router.use(protect);
 
