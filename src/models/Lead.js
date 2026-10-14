@@ -177,6 +177,23 @@ const leadSchema = new mongoose.Schema({
         gstIncluded: { type: Boolean, default: true },
         manualRemarks: { type: String, default: '' }
     },
+    vehicleMatrix: {
+        fuelType: { type: String, default: 'Diesel' },
+        totalKmRun: { type: Number, default: 0 },
+        vehicleAverage: { type: Number, default: 0 },
+        fuelRate: { type: Number, default: 0 },
+        fuelCost: { type: Number, default: 0 },
+        driverSalary: { type: Number, default: 0 },
+        nightHold: { type: Number, default: 0 },
+        tollAndParking: { type: Number, default: 0 },
+        gstType: { type: String, default: '5% Included' },
+        gstAmount: { type: Number, default: 0 },
+        packageValue: { type: Number, default: 0 },
+        targetPerDay: { type: Number, default: 0 },
+        totalCost: { type: Number, default: 0 },
+        totalProfit: { type: Number, default: 0 },
+        perDayProfit: { type: Number, default: 0 }
+    },
     remarksHistory: [remarkSchema]
 }, {
     timestamps: true

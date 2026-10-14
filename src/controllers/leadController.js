@@ -283,6 +283,7 @@ const createLead = asyncHandler(async (req, res) => {
         })(),
         notes,
         specialRemarks: specialRemarks || '',
+        vehicleMatrix: req.body.vehicleMatrix || {},
         inclusions: inclusions || {
             driverAllowance: true,
             nightAllowance: true,
@@ -329,6 +330,22 @@ const updateLead = asyncHandler(async (req, res) => {
 
     if (req.body.totalAmount !== undefined) {
         req.body.totalAmount = Number(req.body.totalAmount) || 0;
+    }
+
+    // Auto-reactivate unconfirmed lead if dates are updated to the future
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const startCandidate = req.body.travelStartDate ? new Date(req.body.travelStartDate) : (lead.travelStartDate ? new Date(lead.travelStartDate) : null);
+    const endCandidate = req.body.travelEndDate ? new Date(req.body.travelEndDate) : (lead.travelEndDate ? new Date(lead.travelEndDate) : startCandidate);
+
+    if (endCandidate) endCandidate.setHours(23, 59, 59, 999);
+
+    if (endCandidate && endCandidate >= now) {
+        // If lead was in Cancelled status and has no confirmed booking, restore to New / active
+        if (lead.status === 'Cancelled' && !lead.bookingId && !lead.bookingRef) {
+            req.body.status = req.body.status === 'Cancelled' ? 'New' : (req.body.status || 'New');
+            req.body.notes = req.body.notes ? `${req.body.notes} | Reactivated: tour date in future` : 'Reactivated to Open (Tour dates updated to future)';
+        }
     }
 
     const updatedLead = await Lead.findByIdAndUpdate(
@@ -657,6 +674,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         gstAmount,
         bookingStatus: 'Confirmed',
         paymentStatus: advance >= grandTotal ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'No Advance'),
+        vehicleMatrix: lead.vehicleMatrix || {},
         termsAndConditions: termsAndConditions || [
             'All rates are strictly subject to vehicle availability at the time of confirmation.',
             'Toll, Tax, Parking, State Border Tax will be charged on actuals unless explicitly mentioned.',
