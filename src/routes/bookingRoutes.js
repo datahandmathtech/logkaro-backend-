@@ -6,7 +6,8 @@ const {
     updateBooking,
     recordBookingPayment,
     cancelBooking,
-    assignBookingDrivers
+    assignBookingDrivers,
+    deleteBooking
 } = require('../controllers/bookingController');
 const { adminOrExecutive, checkCompany, protect } = require('../middleware/authMiddleware');
 
@@ -17,8 +18,10 @@ router.route(['/:companyId', '/company/:companyId'])
 
 router.route('/single/:id')
     .get(adminOrExecutive, getBookingById)
-    .put(adminOrExecutive, updateBooking);
+    .put(adminOrExecutive, updateBooking)
+    .delete(adminOrExecutive, deleteBooking);
 
+router.delete('/:id', adminOrExecutive, deleteBooking);
 router.post('/:id/payment', adminOrExecutive, recordBookingPayment);
 router.post('/:id/cancel', adminOrExecutive, cancelBooking);
 router.post('/:id/assign-drivers', adminOrExecutive, assignBookingDrivers);

@@ -121,6 +121,10 @@ const updateBooking = asyncHandler(async (req, res) => {
         vehicleMatrix, gstMode, gstRate, specialRemarks
     } = req.body;
 
+    const oldClientName = booking.clientName;
+    const oldMobile = booking.mobileNumber;
+    const oldTotalAmount = booking.totalAmount;
+
     if (bookingStatus) booking.bookingStatus = bookingStatus;
     if (paymentStatus) booking.paymentStatus = paymentStatus;
     if (notes !== undefined) booking.notes = notes;
@@ -157,6 +161,17 @@ const updateBooking = asyncHandler(async (req, res) => {
 
     if (itinerary) {
         booking.itinerary = itinerary;
+        const itinTotal = itinerary.reduce((sum, d) => sum + (Number(d.amount) || Number(d.rate) || 0), 0);
+        if (itinTotal > 0) {
+            booking.totalAmount = itinTotal;
+        }
+        if (itinerary[0]?.vehicleType) {
+            booking.vehicleType = itinerary[0].vehicleType;
+        }
+        if (itinerary[0]?.pickupPoint) {
+            booking.pickupPoint = itinerary[0].pickupPoint;
+            booking.pickupLocation = itinerary[0].pickupPoint;
+        }
     }
 
     if (vehicleMatrix) {
@@ -164,9 +179,247 @@ const updateBooking = asyncHandler(async (req, res) => {
     }
 
     // Recalculate balance
-    booking.balanceDue = booking.totalAmount - (booking.advancePaid || 0);
+    booking.balanceDue = Math.max(0, booking.totalAmount - (booking.advancePaid || 0));
 
     await booking.save();
+
+    // -------------------------------------------------------------------------
+    // CASCADE SYNC 1: LIVE DRS (DRSDuty)
+    // Synchronize client details, dates, vehicles, and itinerary days to Live DRS
+    // -------------------------------------------------------------------------
+    try {
+        const dutyMatch = {
+            $or: [
+                { bookingRef: booking._id },
+                { bookingId: booking.bookingId }
+            ]
+        };
+        if (Array.isArray(booking.drsDuties) && booking.drsDuties.length > 0) {
+            dutyMatch.$or.push({ _id: { $in: booking.drsDuties } });
+        }
+
+        const effectivePaymentStatus = (booking.paymentStatus === 'Full Received' || booking.balanceDue <= 0) 
+            ? 'Full Received' 
+            : (booking.advancePaid > 0 ? 'Advance Received' : 'Pending');
+
+        // Update core client & booking info on all existing duties for this booking
+        await DRSDuty.updateMany(dutyMatch, {
+            $set: {
+                clientName: booking.clientName,
+                mobileNumber: booking.mobileNumber,
+                carType: booking.vehicleType || 'Sedan',
+                paymentStatus: effectivePaymentStatus
+            }
+        });
+
+        // If itinerary was updated, sync day-by-day with DRSDuty
+        if (Array.isArray(booking.itinerary) && booking.itinerary.length > 0) {
+            let existingDuties = await DRSDuty.find(dutyMatch).sort({ dayNo: 1, date: 1 });
+            const updatedDutyIds = [];
+
+            for (let idx = 0; idx < booking.itinerary.length; idx++) {
+                const item = booking.itinerary[idx];
+                const dayNo = item.dayNo || (idx + 1);
+                let dateStr = '';
+                if (item.date) {
+                    try {
+                        dateStr = new Date(item.date).toISOString().split('T')[0];
+                    } catch (_) {}
+                }
+
+                // Match existing duty by dayNo or calendar date
+                let matchedDuty = existingDuties.find(d => d.dayNo === dayNo);
+                if (!matchedDuty && dateStr) {
+                    matchedDuty = existingDuties.find(d => {
+                        if (!d.date) return false;
+                        try {
+                            return new Date(d.date).toISOString().split('T')[0] === dateStr;
+                        } catch (_) {
+                            return false;
+                        }
+                    });
+                }
+
+                const dutyText = item.duty || item.description || (idx === 0 ? 'City Tour / Transfer' : 'Scheduled Duty');
+                const dutyHotel = item.pickupPoint || booking.pickupPoint || booking.pickupLocation || '';
+                const dutyRevenue = Number(item.amount) || Number(item.rate) || (idx === 0 ? Number(booking.totalAmount) : 0);
+
+                if (matchedDuty) {
+                    matchedDuty.clientName = booking.clientName;
+                    matchedDuty.mobileNumber = booking.mobileNumber;
+                    if (item.date) matchedDuty.date = new Date(item.date);
+                    if (item.time) matchedDuty.time = item.time;
+                    matchedDuty.hotel = dutyHotel;
+                    matchedDuty.pickupPoint = item.pickupPoint || booking.pickupPoint || '';
+                    matchedDuty.duty = dutyText;
+                    matchedDuty.itinerary = dutyText;
+                    matchedDuty.carType = item.vehicleType || booking.vehicleType || 'Sedan';
+                    matchedDuty.revenue = dutyRevenue;
+                    matchedDuty.paymentStatus = effectivePaymentStatus;
+                    if (item.km) matchedDuty.km = item.km;
+
+                    // Driver & Vehicle assignment if specified in itinerary day
+                    if (item.driver || item.driverId) {
+                        matchedDuty.driver = (item.driverId && item.driverId !== 'custom') ? item.driverId : (item.driver || null);
+                    }
+                    if (item.driverName) matchedDuty.customDriverName = item.driverName;
+                    if (item.driverPhone) matchedDuty.driverMobile = item.driverPhone;
+                    if (item.vehicle || item.vehicleId) {
+                        matchedDuty.vehicle = item.vehicleId || item.vehicle || null;
+                    }
+                    if (item.vehicleNumber) matchedDuty.customCarNumber = item.vehicleNumber;
+                    if (matchedDuty.driver || matchedDuty.customDriverName) {
+                        matchedDuty.status = 'Assigned';
+                    }
+
+                    await matchedDuty.save();
+                    updatedDutyIds.push(matchedDuty._id);
+                } else {
+                    // Create new duty for newly added day
+                    const newDuty = await DRSDuty.create({
+                        company: booking.company,
+                        bookingRef: booking._id,
+                        bookingId: booking.bookingId,
+                        dayNo: dayNo,
+                        clientName: booking.clientName,
+                        mobileNumber: booking.mobileNumber,
+                        date: item.date ? new Date(item.date) : (booking.travelStartDate || new Date()),
+                        time: item.time || '09:00 AM',
+                        hotel: dutyHotel,
+                        pickupPoint: item.pickupPoint || booking.pickupPoint || '',
+                        duty: dutyText,
+                        itinerary: dutyText,
+                        carType: item.vehicleType || booking.vehicleType || 'Sedan',
+                        revenue: dutyRevenue,
+                        km: item.km || '',
+                        driver: (item.driverId && item.driverId !== 'custom') ? item.driverId : (item.driver || null),
+                        customDriverName: item.driverName || '',
+                        driverMobile: item.driverPhone || '',
+                        vehicle: item.vehicleId || item.vehicle || null,
+                        customCarNumber: item.vehicleNumber || '',
+                        paymentStatus: effectivePaymentStatus,
+                        status: (item.driverId || item.driverName) ? 'Assigned' : 'Scheduled',
+                        isDirectBooking: false
+                    });
+                    updatedDutyIds.push(newDuty._id);
+                }
+            }
+
+            // Clean up duties that were removed from the itinerary
+            if (updatedDutyIds.length > 0) {
+                const dutiesToRemove = existingDuties.filter(d => !updatedDutyIds.some(id => String(id) === String(d._id)));
+                if (dutiesToRemove.length > 0) {
+                    await DRSDuty.deleteMany({ _id: { $in: dutiesToRemove.map(d => d._id) } });
+                }
+            }
+            booking.drsDuties = updatedDutyIds;
+            await booking.save();
+        } else if (booking.travelStartDate) {
+            // Single-day duty - update date and hotel
+            await DRSDuty.updateMany(dutyMatch, {
+                $set: {
+                    date: booking.travelStartDate,
+                    hotel: booking.pickupPoint || booking.pickupLocation || '',
+                    pickupPoint: booking.pickupPoint || '',
+                    revenue: booking.totalAmount
+                }
+            });
+        }
+    } catch (drsSyncErr) {
+        console.error('Error cascading booking update to DRS:', drsSyncErr);
+    }
+
+    // -------------------------------------------------------------------------
+    // CASCADE SYNC 2: CLIENT (Clients directory / Client Ledger)
+    // -------------------------------------------------------------------------
+    try {
+        let clientDoc = null;
+        if (booking.client) {
+            clientDoc = await Client.findById(booking.client);
+        }
+        if (!clientDoc && booking.mobileNumber) {
+            clientDoc = await Client.findOne({ company: booking.company, mobile: booking.mobileNumber });
+        }
+        if (clientDoc) {
+            if (booking.clientName) clientDoc.name = booking.clientName;
+            if (booking.mobileNumber) clientDoc.mobile = booking.mobileNumber;
+            if (booking.email) clientDoc.email = booking.email;
+            if (booking.gstin) clientDoc.gstNumber = booking.gstin;
+            // Adjust balance if total amount changed
+            if (oldTotalAmount !== undefined && booking.totalAmount !== oldTotalAmount) {
+                const amountDiff = booking.totalAmount - oldTotalAmount;
+                clientDoc.totalBilled = Math.max(0, (clientDoc.totalBilled || 0) + amountDiff);
+                clientDoc.balance = Math.max(0, (clientDoc.balance || 0) + amountDiff);
+            }
+            await clientDoc.save();
+        }
+    } catch (clientSyncErr) {
+        console.error('Error cascading booking update to Client:', clientSyncErr);
+    }
+
+    // -------------------------------------------------------------------------
+    // CASCADE SYNC 3: LEADS (Sales Leads tab)
+    // -------------------------------------------------------------------------
+    try {
+        const Lead = require('../models/Lead');
+        await Lead.updateMany(
+            {
+                $or: [
+                    { _id: booking.lead },
+                    { bookingRef: booking._id },
+                    { bookingId: booking.bookingId },
+                    { clientCode: booking.clientCode },
+                    { clientCode: booking.bookingId }
+                ]
+            },
+            {
+                $set: {
+                    clientName: booking.clientName,
+                    mobileNumber: booking.mobileNumber,
+                    alternateMobile: booking.alternateMobile || '',
+                    email: booking.email || '',
+                    gstin: booking.gstin || '',
+                    carType: booking.vehicleType || '',
+                    travelStartDate: booking.travelStartDate,
+                    travelEndDate: booking.travelEndDate,
+                    totalAmount: booking.totalAmount,
+                    pickupPoint: booking.pickupPoint || booking.pickupLocation || '',
+                    dropPoint: booking.dropPoint || booking.dropLocation || ''
+                }
+            }
+        );
+    } catch (leadSyncErr) {
+        console.error('Error cascading booking update to Lead:', leadSyncErr);
+    }
+
+    // -------------------------------------------------------------------------
+    // CASCADE SYNC 4: LEDGER ENTRIES (Accounts & Client Ledger)
+    // -------------------------------------------------------------------------
+    try {
+        if (oldTotalAmount !== undefined && booking.totalAmount !== oldTotalAmount) {
+            await LedgerEntry.findOneAndUpdate(
+                { referenceId: booking._id, type: 'Bill' },
+                {
+                    $set: {
+                        amount: booking.totalAmount,
+                        description: `Booking Confirmed (${booking.bookingCode || booking.bookingId}) - ${booking.clientName}`
+                    }
+                }
+            );
+        } else if (booking.clientName !== oldClientName) {
+            await LedgerEntry.updateMany(
+                { referenceId: booking._id },
+                {
+                    $set: {
+                        description: `Booking (${booking.bookingCode || booking.bookingId}) - ${booking.clientName}`
+                    }
+                }
+            );
+        }
+    } catch (ledgerSyncErr) {
+        console.error('Error cascading booking update to LedgerEntry:', ledgerSyncErr);
+    }
+
     res.json(booking);
 });
 
@@ -393,13 +646,18 @@ const cancelBooking = asyncHandler(async (req, res) => {
         booking.advancePaid = 0;
     }
 
-    // Also cancel all linked DRS duties
-    if (booking.drsDuties && booking.drsDuties.length > 0) {
-        const DRSDuty = require('../models/DRSDuty'); // Ensure required
-        await DRSDuty.updateMany(
-            { _id: { $in: booking.drsDuties } },
-            { $set: { status: 'Cancelled' } }
-        );
+    // Remove all associated DRS duties so they do not clutter Live DRS
+    try {
+        await DRSDuty.deleteMany({
+            $or: [
+                { bookingRef: booking._id },
+                { bookingId: booking.bookingId },
+                { _id: { $in: booking.drsDuties || [] } }
+            ]
+        });
+        booking.drsDuties = [];
+    } catch (drsDelErr) {
+        console.error('Error removing DRS duties on booking cancellation:', drsDelErr);
     }
 
     // Sync with linked Lead so Leads table and Conversions stats stay strictly accurate
@@ -558,11 +816,62 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
     });
 });
 
+// @desc    Permanently delete a booking and its DRS duties
+// @route   DELETE /api/bookings/:id
+// @access  Private/AdminOrExecutive
+const deleteBooking = asyncHandler(async (req, res) => {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+        res.status(404);
+        throw new Error('Booking not found');
+    }
+
+    // 1. Delete all associated DRSDuties
+    await DRSDuty.deleteMany({
+        $or: [
+            { bookingRef: booking._id },
+            { bookingId: booking.bookingId },
+            { _id: { $in: booking.drsDuties || [] } }
+        ]
+    });
+
+    // 2. Remove ledger entries
+    await LedgerEntry.deleteMany({ referenceId: booking._id });
+
+    // 3. Reset linked lead if any
+    try {
+        const Lead = require('../models/Lead');
+        await Lead.updateMany(
+            {
+                $or: [
+                    { bookingRef: booking._id },
+                    { bookingId: booking.bookingId }
+                ]
+            },
+            {
+                $set: {
+                    bookingRef: null,
+                    status: 'Cancelled',
+                    notes: 'Associated booking deleted'
+                }
+            }
+        );
+    } catch (err) {
+        console.error('Error decoupling lead on booking delete:', err);
+    }
+
+    // 4. Delete the booking
+    await booking.deleteOne();
+
+    res.json({ message: 'Booking and associated DRS duties deleted successfully' });
+});
+
 module.exports = {
     getBookings,
     getBookingById,
     updateBooking,
     recordBookingPayment,
     cancelBooking,
-    assignBookingDrivers
+    assignBookingDrivers,
+    deleteBooking
 };

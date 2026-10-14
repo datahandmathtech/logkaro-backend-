@@ -321,7 +321,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
     });
 });
 
-// @desc    Update a DRS duty (including assigning driver/vehicle)
+// @desc    Update a DRS duty (including assigning driver/vehicle and cascading changes to Booking, Client, Lead)
 // @route   PUT /api/drs/:id
 // @access  Private/AdminOrExecutive
 const updateDRSDuty = asyncHandler(async (req, res) => {
@@ -331,6 +331,9 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
         res.status(404);
         throw new Error('Duty not found');
     }
+
+    const oldClientName = duty.clientName;
+    const oldMobile = duty.mobileNumber;
 
     const updatedDuty = await DRSDuty.findByIdAndUpdate(
         req.params.id,
@@ -342,7 +345,39 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     .populate('leadId', 'clientName leadId status')
     .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid balanceDue bookingStatus');
 
-    // Sync back to Booking itinerary ("both ways")
+    const clientNameChanged = updatedDuty.clientName && updatedDuty.clientName !== oldClientName;
+    const mobileChanged = updatedDuty.mobileNumber && updatedDuty.mobileNumber !== oldMobile;
+
+    // -------------------------------------------------------------
+    // CASCADE SYNC 1: SIBLING DRS DUTIES (Same booking/client)
+    // -------------------------------------------------------------
+    try {
+        if (clientNameChanged || mobileChanged) {
+            if (updatedDuty.bookingRef || updatedDuty.bookingId) {
+                await DRSDuty.updateMany(
+                    {
+                        _id: { $ne: updatedDuty._id },
+                        $or: [
+                            { bookingRef: updatedDuty.bookingRef },
+                            { bookingId: updatedDuty.bookingId }
+                        ]
+                    },
+                    {
+                        $set: {
+                            ...(clientNameChanged && { clientName: updatedDuty.clientName }),
+                            ...(mobileChanged && { mobileNumber: updatedDuty.mobileNumber })
+                        }
+                    }
+                );
+            }
+        }
+    } catch (sibErr) {
+        console.error('Error syncing sibling DRS duties:', sibErr);
+    }
+
+    // -------------------------------------------------------------
+    // CASCADE SYNC 2: CONFIRMED BOOKING
+    // -------------------------------------------------------------
     if (updatedDuty.bookingRef || updatedDuty.bookingId) {
         try {
             const bkg = await Booking.findOne({
@@ -351,32 +386,140 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                     { bookingId: updatedDuty.bookingId }
                 ]
             });
-            if (bkg && Array.isArray(bkg.itinerary)) {
-                let modified = false;
-                const dutyDate = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
-                bkg.itinerary = bkg.itinerary.map(item => {
-                    const itemDate = item.date ? new Date(item.date).toISOString().split('T')[0] : '';
-                    if (item.dayNo === updatedDuty.dayNo || (dutyDate && itemDate === dutyDate)) {
-                        modified = true;
-                        return {
-                            ...item,
-                            driver: updatedDuty.driver?._id || updatedDuty.driver || null,
-                            driverId: updatedDuty.driver?._id || updatedDuty.driver || '',
-                            driverName: updatedDuty.driver?.name || updatedDuty.customDriverName || '',
-                            driverPhone: updatedDuty.driver?.mobile || updatedDuty.driverMobile || '',
-                            vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
-                            vehicleId: updatedDuty.vehicle?._id || updatedDuty.vehicle || '',
-                            vehicleNumber: updatedDuty.vehicle?.carNumber || updatedDuty.customCarNumber || ''
-                        };
-                    }
-                    return item;
-                });
-                if (modified) {
-                    await bkg.save();
+            if (bkg) {
+                if (updatedDuty.clientName) bkg.clientName = updatedDuty.clientName;
+                if (updatedDuty.mobileNumber) bkg.mobileNumber = updatedDuty.mobileNumber;
+                if (updatedDuty.hotel) {
+                    bkg.pickupLocation = updatedDuty.hotel;
+                    bkg.pickupPoint = updatedDuty.hotel;
                 }
+                if (updatedDuty.carType) {
+                    bkg.vehicleType = updatedDuty.carType;
+                }
+
+                // Sync itinerary day in booking
+                if (Array.isArray(bkg.itinerary) && bkg.itinerary.length > 0) {
+                    const dutyDate = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
+                    let matched = false;
+                    bkg.itinerary = bkg.itinerary.map(item => {
+                        const itemDate = item.date ? new Date(item.date).toISOString().split('T')[0] : '';
+                        if (item.dayNo === updatedDuty.dayNo || (dutyDate && itemDate === dutyDate)) {
+                            matched = true;
+                            return {
+                                ...item,
+                                duty: updatedDuty.duty || updatedDuty.itinerary || item.duty,
+                                description: updatedDuty.duty || updatedDuty.itinerary || item.description,
+                                time: updatedDuty.time || item.time,
+                                pickupPoint: updatedDuty.hotel || updatedDuty.pickupPoint || item.pickupPoint,
+                                vehicleType: updatedDuty.carType || item.vehicleType,
+                                amount: updatedDuty.revenue !== undefined ? Number(updatedDuty.revenue) : item.amount,
+                                driver: updatedDuty.driver?._id || updatedDuty.driver || null,
+                                driverId: updatedDuty.driver?._id || updatedDuty.driver || '',
+                                driverName: updatedDuty.driver?.name || updatedDuty.customDriverName || item.driverName || '',
+                                driverPhone: updatedDuty.driver?.mobile || updatedDuty.driverMobile || item.driverPhone || '',
+                                vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
+                                vehicleId: updatedDuty.vehicle?._id || updatedDuty.vehicle || '',
+                                vehicleNumber: updatedDuty.vehicle?.carNumber || updatedDuty.customCarNumber || item.vehicleNumber || ''
+                            };
+                        }
+                        return item;
+                    });
+
+                    // Recalculate total amount from all itinerary days
+                    const newTotal = bkg.itinerary.reduce((acc, curr) => acc + (Number(curr.amount) || Number(curr.rate) || 0), 0);
+                    if (newTotal > 0) {
+                        bkg.totalAmount = newTotal;
+                        bkg.balanceDue = Math.max(0, bkg.totalAmount - (bkg.advancePaid || 0));
+                    }
+                } else if (updatedDuty.revenue !== undefined && Number(updatedDuty.revenue) > 0) {
+                    bkg.totalAmount = Number(updatedDuty.revenue);
+                    bkg.balanceDue = Math.max(0, bkg.totalAmount - (bkg.advancePaid || 0));
+                }
+
+                await bkg.save();
+
+                // -------------------------------------------------------------
+                // CASCADE SYNC 3: CLIENT (Clients Directory / Ledger)
+                // -------------------------------------------------------------
+                if (bkg.client) {
+                    const clientDoc = await Client.findById(bkg.client);
+                    if (clientDoc) {
+                        if (updatedDuty.clientName) clientDoc.name = updatedDuty.clientName;
+                        if (updatedDuty.mobileNumber) clientDoc.mobile = updatedDuty.mobileNumber;
+                        clientDoc.totalBilled = bkg.totalAmount;
+                        clientDoc.balance = Math.max(0, clientDoc.totalBilled - (clientDoc.totalPaid || 0));
+                        await clientDoc.save();
+                    }
+                } else if (updatedDuty.mobileNumber) {
+                    await Client.findOneAndUpdate(
+                        { company: updatedDuty.company, mobile: updatedDuty.mobileNumber },
+                        { $set: { name: updatedDuty.clientName } }
+                    );
+                }
+
+                // -------------------------------------------------------------
+                // CASCADE SYNC 4: LEADS (Sales Leads)
+                // -------------------------------------------------------------
+                const Lead = require('../models/Lead');
+                await Lead.updateMany(
+                    {
+                        $or: [
+                            { _id: bkg.lead },
+                            { bookingRef: bkg._id },
+                            { bookingId: bkg.bookingId },
+                            { clientCode: bkg.clientCode },
+                            { clientCode: bkg.bookingId }
+                        ]
+                    },
+                    {
+                        $set: {
+                            ...(updatedDuty.clientName && { clientName: updatedDuty.clientName }),
+                            ...(updatedDuty.mobileNumber && { mobileNumber: updatedDuty.mobileNumber }),
+                            ...(updatedDuty.hotel && { pickupPoint: updatedDuty.hotel }),
+                            ...(updatedDuty.carType && { carType: updatedDuty.carType }),
+                            totalAmount: bkg.totalAmount
+                        }
+                    }
+                );
+
+                // -------------------------------------------------------------
+                // CASCADE SYNC 5: LEDGER ENTRY (Bill Amount)
+                // -------------------------------------------------------------
+                await LedgerEntry.findOneAndUpdate(
+                    { referenceId: bkg._id, type: 'Bill' },
+                    {
+                        $set: {
+                            amount: bkg.totalAmount,
+                            description: `Booking Confirmed (${bkg.bookingCode || bkg.bookingId}) - ${bkg.clientName}`
+                        }
+                    }
+                );
             }
         } catch (syncErr) {
-            console.error('Error syncing DRS update back to Booking itinerary:', syncErr);
+            console.error('Error syncing DRS update back to Booking/Client/Lead:', syncErr);
+        }
+    } else {
+        // If duty is direct or linked to Lead directly
+        try {
+            if (updatedDuty.leadId) {
+                const Lead = require('../models/Lead');
+                await Lead.findByIdAndUpdate(updatedDuty.leadId, {
+                    $set: {
+                        ...(updatedDuty.clientName && { clientName: updatedDuty.clientName }),
+                        ...(updatedDuty.mobileNumber && { mobileNumber: updatedDuty.mobileNumber }),
+                        ...(updatedDuty.hotel && { pickupPoint: updatedDuty.hotel }),
+                        ...(updatedDuty.carType && { carType: updatedDuty.carType })
+                    }
+                });
+            }
+            if (updatedDuty.mobileNumber) {
+                await Client.findOneAndUpdate(
+                    { company: updatedDuty.company, mobile: updatedDuty.mobileNumber },
+                    { $set: { name: updatedDuty.clientName } }
+                );
+            }
+        } catch (leadClientErr) {
+            console.error('Error syncing standalone DRS update to Lead/Client:', leadClientErr);
         }
     }
 
@@ -392,6 +535,18 @@ const deleteDRSDuty = asyncHandler(async (req, res) => {
     if (!duty) {
         res.status(404);
         throw new Error('Duty not found');
+    }
+
+    // Pull from linked booking's drsDuties array
+    if (duty.bookingRef || duty.bookingId) {
+        try {
+            await Booking.updateMany(
+                { $or: [{ _id: duty.bookingRef }, { bookingId: duty.bookingId }] },
+                { $pull: { drsDuties: duty._id } }
+            );
+        } catch (err) {
+            console.error('Error pulling deleted duty from booking:', err);
+        }
     }
 
     await removeFinancialTransaction({ sourceId: duty._id });
