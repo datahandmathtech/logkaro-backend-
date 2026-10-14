@@ -1,3 +1,0 @@
-Connected
-Checking 29 drivers...
-Done
