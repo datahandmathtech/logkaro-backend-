@@ -39,7 +39,28 @@ const getBookings = asyncHandler(async (req, res) => {
         ];
     }
 
-    
+    // Auto-complete past confirmed/ongoing bookings whose tour end date has already passed
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    try {
+        await Booking.updateMany(
+            {
+                company: req.params.companyId,
+                bookingStatus: { $in: ['Confirmed', 'Ongoing'] },
+                $or: [
+                    { travelEndDate: { $lt: today } },
+                    { travelEndDate: null, travelStartDate: { $lt: today } }
+                ]
+            },
+            {
+                $set: { bookingStatus: 'Completed' }
+            }
+        );
+    } catch (autoCompErr) {
+        console.error('Error auto-completing finished bookings:', autoCompErr);
+    }
+
     const bookings = await Booking.find(query)
         .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks')
         .populate('client', 'name mobile balance')
