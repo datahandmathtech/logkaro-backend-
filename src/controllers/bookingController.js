@@ -114,24 +114,31 @@ const updateBooking = asyncHandler(async (req, res) => {
 
     const { 
         bookingStatus, paymentStatus, notes, termsAndConditions,
-        vehicleType, totalAmount, travelStartDate, travelEndDate,
-        pickupLocation, dropLocation, itinerary, adminOverride, advancePaid,
+        vehicleType, numberOfCars, totalAmount, travelStartDate, travelEndDate,
+        pickupLocation, dropLocation, pickupPoint, dropPoint, itinerary, adminOverride, advancePaid,
         clientName, mobileNumber, alternateMobile, email, gstin,
-        source, salesPerson, bookingReference, vehicleMatrix
+        source, salesPerson, bookingReference, travelAgent, travelAgentName, travelAgentMobile,
+        vehicleMatrix, gstMode, gstRate, specialRemarks
     } = req.body;
 
     if (bookingStatus) booking.bookingStatus = bookingStatus;
     if (paymentStatus) booking.paymentStatus = paymentStatus;
     if (notes !== undefined) booking.notes = notes;
+    if (specialRemarks !== undefined) booking.specialRemarks = specialRemarks;
     if (termsAndConditions) booking.termsAndConditions = termsAndConditions;
     
     // Core edit fields
     if (vehicleType) booking.vehicleType = vehicleType;
+    if (numberOfCars !== undefined) booking.numberOfCars = Number(numberOfCars);
     if (totalAmount !== undefined) booking.totalAmount = Number(totalAmount);
     if (travelStartDate) booking.travelStartDate = new Date(travelStartDate);
     if (travelEndDate) booking.travelEndDate = new Date(travelEndDate);
     if (pickupLocation !== undefined) booking.pickupLocation = pickupLocation;
     if (dropLocation !== undefined) booking.dropLocation = dropLocation;
+    if (pickupPoint !== undefined) booking.pickupPoint = pickupPoint;
+    if (dropPoint !== undefined) booking.dropPoint = dropPoint;
+    if (gstMode !== undefined) booking.gstMode = gstMode;
+    if (gstRate !== undefined) booking.gstRate = Number(gstRate);
     
     // Client Info fields
     if (clientName !== undefined) booking.clientName = clientName;
@@ -144,6 +151,9 @@ const updateBooking = asyncHandler(async (req, res) => {
     if (source !== undefined) booking.source = source;
     if (salesPerson !== undefined) booking.salesPerson = salesPerson;
     if (bookingReference !== undefined) booking.bookingReference = bookingReference;
+    if (travelAgent !== undefined) booking.travelAgent = travelAgent;
+    if (travelAgentName !== undefined) booking.travelAgentName = travelAgentName;
+    if (travelAgentMobile !== undefined) booking.travelAgentMobile = travelAgentMobile;
 
     if (itinerary) {
         booking.itinerary = itinerary;
