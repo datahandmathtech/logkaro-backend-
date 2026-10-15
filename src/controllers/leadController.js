@@ -561,83 +561,13 @@ const convertToBooking = asyncHandler(async (req, res) => {
         }
     }
 
-    // 4. Create Day-wise DRS entries for each car
-    const numberOfCars = lead.numberOfCars || 1;
+    // 4. Do NOT auto-create Live DRS (DRSDuty) entries here.
+    // Live DRS entries are ONLY created when the user completes "Assign Drivers & Vehicles" in Confirmed Bookings.
     const drsEntries = [];
 
     const isAgent = lead.bookingReference === 'Travel Agent' || lead.source === 'Agent';
     const agentName = lead.travelAgentName || (client && client.clientType === 'Travel Agent' ? (client.agencyName || client.name) : '');
     const agentMob = lead.travelAgentMobile || (client && client.clientType === 'Travel Agent' ? client.mobile : '');
-
-    let itineraryDays = Array.isArray(lead.itinerary) && lead.itinerary.length > 0 ? [...lead.itinerary] : [];
-    if (lead.travelStartDate && lead.travelEndDate) {
-        const start = new Date(lead.travelStartDate);
-        const end = new Date(lead.travelEndDate);
-        const diffDays = Math.max(1, Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1);
-        if (itineraryDays.length < diffDays) {
-            for (let i = itineraryDays.length; i < diffDays; i++) {
-                const dayDate = new Date(start);
-                dayDate.setDate(start.getDate() + i);
-                itineraryDays.push({
-                    dayNo: i + 1,
-                    date: dayDate,
-                    time: '09:00 AM',
-                    duty: i === 0 ? 'Airport Pickup & Local Sightseeing' : (i === diffDays - 1 ? 'City Local & Station/Airport Drop' : 'City Tour / Sightseeing'),
-                    vehicleType: lead.carType || 'Sedan',
-                    amount: 0
-                });
-            }
-        }
-    } else if (itineraryDays.length === 0) {
-        itineraryDays.push({
-            dayNo: 1,
-            date: lead.travelStartDate || new Date(),
-            time: '09:00 AM',
-            duty: 'Airport Pickup & Local Sightseeing',
-            vehicleType: lead.carType || 'Sedan',
-            amount: 0
-        });
-    }
-
-    for (const [idx, day] of itineraryDays.entries()) {
-        const dayNo = day.dayNo || (idx + 1);
-        for (let i = 0; i < numberOfCars; i++) {
-            const dutyText = day.duty || day.description || 'Scheduled Duty';
-            const carLabel = numberOfCars > 1 ? ` (Car ${i + 1}/${numberOfCars})` : '';
-            
-            // DRS Display for Driver:
-            // Hotel/Source: Show Agent Name if Agent booking
-            // Guest Name: Show real guest name if given, or Placard with Agent name
-            // Mobile: Show guest mobile, or Agent mobile so driver can contact
-            const hotelDisplay = isAgent && agentName ? `Agent: ${agentName}` : (day.pickupPoint || lead.source || 'Direct');
-            const hasRealGuest = lead.clientName && !lead.clientName.toLowerCase().includes('guest (tba)') && !lead.clientName.toLowerCase().includes('client');
-            const guestDisplay = hasRealGuest ? `${lead.clientName}${carLabel}` : (agentName ? `Placard: ${agentName}${carLabel}` : `Guest (TBA)${carLabel}`);
-            const hasRealMob = lead.mobileNumber && lead.mobileNumber !== 'TBA' && lead.mobileNumber.trim().length > 0;
-            const mobDisplay = hasRealMob ? lead.mobileNumber : (agentMob ? `Agent: ${agentMob}` : 'PLACARD');
-
-            const entry = await DRSDuty.create({
-                company: lead.company,
-                leadId: lead._id,
-                bookingId: bookingId,
-                clientName: guestDisplay,
-                mobileNumber: mobDisplay,
-                hotel: hotelDisplay,
-                date: day.date,
-                time: day.time || '09:00 AM',
-                pickupPoint: day.pickupPoint || '',
-                duty: dutyText,
-                dayNo: dayNo,
-                carType: day.vehicleType || lead.carType,
-                itinerary: dutyText,
-                revenue: day.amount || 0,
-                paymentStatus: advance > 0 ? (balanceDue <= 0 ? 'Full Received' : 'Advance Received') : 'Pending',
-                status: 'Scheduled',
-                isDirectBooking: !isAgent,
-                guestRemarks: day.specialNotes || (isAgent ? `Agent Booking: ${agentName}` : '')
-            });
-            drsEntries.push(entry._id);
-        }
-    }
 
     // 5. Create the Booking document
     const booking = await Booking.create({
@@ -667,7 +597,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         travelEndDate: lead.travelEndDate,
         vehicleType: lead.carType,
         numberOfCars: lead.numberOfCars,
-        itinerary: lead.itinerary,
+        itinerary: lead.itinerary || [],
         totalAmount: grandTotal,
         advancePaid: advance, advanceDate: advancePaymentDate || new Date(),
         paymentMode: paymentMode || 'UPI / QR Code',
@@ -687,16 +617,8 @@ const convertToBooking = asyncHandler(async (req, res) => {
             'Night driving charge applies between 10:00 PM and 06:00 AM.'
         ],
         notes: notes || adminOverrideReason || '',
-        drsDuties: drsEntries
+        drsDuties: []
     });
-
-    // Backfill bookingRef on all created DRS duty records
-    if (drsEntries.length > 0) {
-        await DRSDuty.updateMany(
-            { _id: { $in: drsEntries } },
-            { $set: { bookingRef: booking._id } }
-        );
-    }
 
     // Link bookingRef to BankTransaction / CashTransaction if created
     if (advance > 0) {
@@ -709,14 +631,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         );
     }
 
-    // 6. Update lead status and reference, and link drsDuties with bookingRef
-    if (drsEntries.length > 0) {
-        await DRSDuty.updateMany(
-            { _id: { $in: drsEntries } },
-            { bookingRef: booking._id }
-        );
-    }
-
+    // 6. Update lead status and reference
     lead.status = 'Confirmed';
     lead.advancePayment = advance;
     lead.advanceDate = advancePaymentDate || new Date();
@@ -730,7 +645,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         bookingId: bookingId,
         booking,
         lead,
-        createdDutiesCount: drsEntries.length
+        createdDutiesCount: 0
     });
 });
 

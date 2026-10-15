@@ -69,15 +69,14 @@ const getBookings = asyncHandler(async (req, res) => {
     const bookings = await Booking.find(query)
         .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks')
         .populate('client', 'name mobile balance')
+        .populate({
+            path: 'drsDuties',
+            populate: [
+                { path: 'driver', select: 'name mobile phone' },
+                { path: 'vehicle', select: 'carNumber model type' }
+            ]
+        })
         .sort({ createdAt: -1 });
-
-    
-    // Note: Do not auto-complete based on balance <= 0 (full payment does not mean trip is completed).
-    // Trip completion should only occur when explicitly completed by user or through DRS duty closure.
-
-    
-    // If we updated any, just return the updated array directly without re-fetching
-
 
     res.json(bookings);
 });
@@ -166,6 +165,7 @@ const updateBooking = asyncHandler(async (req, res) => {
 
     if (itinerary) {
         booking.itinerary = itinerary;
+        booking.markModified('itinerary');
         const itinTotal = itinerary.reduce((sum, d) => sum + (Number(d.amount) || Number(d.rate) || 0), 0);
         if (itinTotal > 0) {
             booking.totalAmount = itinTotal;
@@ -190,7 +190,7 @@ const updateBooking = asyncHandler(async (req, res) => {
 
     // -------------------------------------------------------------------------
     // CASCADE SYNC 1: LIVE DRS (DRSDuty)
-    // Synchronize client details, dates, vehicles, and itinerary days to Live DRS
+    // Only sync if this booking has ALREADY been sent to Live DRS via "Assign Drivers & Vehicles"
     // -------------------------------------------------------------------------
     try {
         const dutyMatch = {
@@ -203,132 +203,129 @@ const updateBooking = asyncHandler(async (req, res) => {
             dutyMatch.$or.push({ _id: { $in: booking.drsDuties } });
         }
 
-        const effectivePaymentStatus = (booking.paymentStatus === 'Full Received' || booking.balanceDue <= 0) 
-            ? 'Full Received' 
-            : (booking.advancePaid > 0 ? 'Advance Received' : 'Pending');
+        let existingDuties = await DRSDuty.find(dutyMatch).sort({ dayNo: 1, date: 1 });
 
-        // Update core client & booking info on all existing duties for this booking
-        await DRSDuty.updateMany(dutyMatch, {
-            $set: {
-                clientName: booking.clientName,
-                mobileNumber: booking.mobileNumber,
-                carType: booking.vehicleType || 'Sedan',
-                paymentStatus: effectivePaymentStatus
-            }
-        });
+        // Strictly only sync if duties already exist in Live DRS (created via Assign Drivers & Vehicles)
+        if (existingDuties.length > 0) {
+            const effectivePaymentStatus = (booking.paymentStatus === 'Full Received' || booking.balanceDue <= 0) 
+                ? 'Full Received' 
+                : (booking.advancePaid > 0 ? 'Advance Received' : 'Pending');
 
-        // If itinerary was updated, sync day-by-day with DRSDuty
-        if (Array.isArray(booking.itinerary) && booking.itinerary.length > 0) {
-            let existingDuties = await DRSDuty.find(dutyMatch).sort({ dayNo: 1, date: 1 });
-            const updatedDutyIds = [];
-
-            for (let idx = 0; idx < booking.itinerary.length; idx++) {
-                const item = booking.itinerary[idx];
-                const dayNo = item.dayNo || (idx + 1);
-                let dateStr = '';
-                if (item.date) {
-                    try {
-                        dateStr = new Date(item.date).toISOString().split('T')[0];
-                    } catch (_) {}
-                }
-
-                // Match existing duty by dayNo or calendar date
-                let matchedDuty = existingDuties.find(d => d.dayNo === dayNo);
-                if (!matchedDuty && dateStr) {
-                    matchedDuty = existingDuties.find(d => {
-                        if (!d.date) return false;
-                        try {
-                            return new Date(d.date).toISOString().split('T')[0] === dateStr;
-                        } catch (_) {
-                            return false;
-                        }
-                    });
-                }
-
-                const dutyText = item.duty || item.description || (idx === 0 ? 'City Tour / Transfer' : 'Scheduled Duty');
-                const dutyHotel = item.pickupPoint || booking.pickupPoint || booking.pickupLocation || '';
-                const dutyRevenue = Number(item.amount) || Number(item.rate) || (idx === 0 ? Number(booking.totalAmount) : 0);
-
-                if (matchedDuty) {
-                    matchedDuty.clientName = booking.clientName;
-                    matchedDuty.mobileNumber = booking.mobileNumber;
-                    if (item.date) matchedDuty.date = new Date(item.date);
-                    if (item.time) matchedDuty.time = item.time;
-                    matchedDuty.hotel = dutyHotel;
-                    matchedDuty.pickupPoint = item.pickupPoint || booking.pickupPoint || '';
-                    matchedDuty.duty = dutyText;
-                    matchedDuty.itinerary = dutyText;
-                    matchedDuty.carType = item.vehicleType || booking.vehicleType || 'Sedan';
-                    matchedDuty.revenue = dutyRevenue;
-                    matchedDuty.paymentStatus = effectivePaymentStatus;
-                    if (item.km) matchedDuty.km = item.km;
-
-                    // Driver & Vehicle assignment if specified in itinerary day
-                    if (item.driver || item.driverId) {
-                        matchedDuty.driver = (item.driverId && item.driverId !== 'custom') ? item.driverId : (item.driver || null);
-                    }
-                    if (item.driverName) matchedDuty.customDriverName = item.driverName;
-                    if (item.driverPhone) matchedDuty.driverMobile = item.driverPhone;
-                    if (item.vehicle || item.vehicleId) {
-                        matchedDuty.vehicle = item.vehicleId || item.vehicle || null;
-                    }
-                    if (item.vehicleNumber) matchedDuty.customCarNumber = item.vehicleNumber;
-                    if (matchedDuty.driver || matchedDuty.customDriverName) {
-                        matchedDuty.status = 'Assigned';
-                    }
-
-                    await matchedDuty.save();
-                    updatedDutyIds.push(matchedDuty._id);
-                } else {
-                    // Create new duty for newly added day
-                    const newDuty = await DRSDuty.create({
-                        company: booking.company,
-                        bookingRef: booking._id,
-                        bookingId: booking.bookingId,
-                        dayNo: dayNo,
-                        clientName: booking.clientName,
-                        mobileNumber: booking.mobileNumber,
-                        date: item.date ? new Date(item.date) : (booking.travelStartDate || new Date()),
-                        time: item.time || '09:00 AM',
-                        hotel: dutyHotel,
-                        pickupPoint: item.pickupPoint || booking.pickupPoint || '',
-                        duty: dutyText,
-                        itinerary: dutyText,
-                        carType: item.vehicleType || booking.vehicleType || 'Sedan',
-                        revenue: dutyRevenue,
-                        km: item.km || '',
-                        driver: (item.driverId && item.driverId !== 'custom') ? item.driverId : (item.driver || null),
-                        customDriverName: item.driverName || '',
-                        driverMobile: item.driverPhone || '',
-                        vehicle: item.vehicleId || item.vehicle || null,
-                        customCarNumber: item.vehicleNumber || '',
-                        paymentStatus: effectivePaymentStatus,
-                        status: (item.driverId || item.driverName) ? 'Assigned' : 'Scheduled',
-                        isDirectBooking: false
-                    });
-                    updatedDutyIds.push(newDuty._id);
-                }
-            }
-
-            // Clean up duties that were removed from the itinerary
-            if (updatedDutyIds.length > 0) {
-                const dutiesToRemove = existingDuties.filter(d => !updatedDutyIds.some(id => String(id) === String(d._id)));
-                if (dutiesToRemove.length > 0) {
-                    await DRSDuty.deleteMany({ _id: { $in: dutiesToRemove.map(d => d._id) } });
-                }
-            }
-            booking.drsDuties = updatedDutyIds;
-            await booking.save();
-        } else if (booking.travelStartDate) {
-            // Single-day duty - update date and hotel
             await DRSDuty.updateMany(dutyMatch, {
                 $set: {
-                    date: booking.travelStartDate,
-                    hotel: booking.pickupPoint || booking.pickupLocation || '',
-                    pickupPoint: booking.pickupPoint || '',
-                    revenue: booking.totalAmount
+                    clientName: booking.clientName,
+                    mobileNumber: booking.mobileNumber,
+                    carType: booking.vehicleType || 'Sedan',
+                    paymentStatus: effectivePaymentStatus
                 }
             });
+
+            if (Array.isArray(booking.itinerary) && booking.itinerary.length > 0) {
+                const updatedDutyIds = [];
+
+                for (let idx = 0; idx < booking.itinerary.length; idx++) {
+                    const item = booking.itinerary[idx];
+                    const dayNo = item.dayNo || (idx + 1);
+                    let dateStr = '';
+                    if (item.date) {
+                        try {
+                            dateStr = new Date(item.date).toISOString().split('T')[0];
+                        } catch (_) {}
+                    }
+
+                    let matchedDuty = existingDuties.find(d => d.dayNo === dayNo);
+                    if (!matchedDuty && dateStr) {
+                        matchedDuty = existingDuties.find(d => {
+                            if (!d.date) return false;
+                            try {
+                                return new Date(d.date).toISOString().split('T')[0] === dateStr;
+                            } catch (_) {
+                                return false;
+                            }
+                        });
+                    }
+
+                    const dutyText = item.duty || item.description || (idx === 0 ? 'City Tour / Transfer' : 'Scheduled Duty');
+                    const dutyHotel = item.pickupPoint || booking.pickupPoint || booking.pickupLocation || booking.source || 'Direct';
+                    const dutyRevenue = Number(item.amount) || Number(item.rate) || (idx === 0 ? Number(booking.totalAmount) : 0);
+
+                    if (matchedDuty) {
+                        matchedDuty.clientName = booking.clientName;
+                        matchedDuty.mobileNumber = booking.mobileNumber;
+                        if (item.date) matchedDuty.date = new Date(item.date);
+                        if (item.time) matchedDuty.time = item.time;
+                        matchedDuty.hotel = dutyHotel;
+                        matchedDuty.pickupPoint = item.pickupPoint || booking.pickupPoint || '';
+                        matchedDuty.duty = dutyText;
+                        matchedDuty.itinerary = dutyText;
+                        matchedDuty.carType = item.vehicleType || booking.vehicleType || 'Sedan';
+                        matchedDuty.revenue = dutyRevenue;
+                        matchedDuty.paymentStatus = effectivePaymentStatus;
+                        if (item.km) matchedDuty.km = item.km;
+
+                        if (item.driver || item.driverId) {
+                            matchedDuty.driver = (item.driverId && item.driverId !== 'custom' && item.driverId !== '__custom__') ? item.driverId : (item.driver || null);
+                        }
+                        if (item.driverName !== undefined) matchedDuty.customDriverName = item.driverName;
+                        if (item.driverPhone !== undefined) matchedDuty.driverMobile = item.driverPhone;
+                        if (item.vehicle || item.vehicleId) {
+                            matchedDuty.vehicle = (item.vehicleId && item.vehicleId !== 'custom' && item.vehicleId !== '__custom__') ? item.vehicleId : (item.vehicle || null);
+                        }
+                        if (item.vehicleNumber !== undefined) matchedDuty.customCarNumber = item.vehicleNumber;
+                        if (matchedDuty.driver || matchedDuty.customDriverName || matchedDuty.vehicle || matchedDuty.customCarNumber) {
+                            matchedDuty.status = 'Assigned';
+                        }
+
+                        await matchedDuty.save();
+                        updatedDutyIds.push(matchedDuty._id);
+                    } else {
+                        const newDuty = await DRSDuty.create({
+                            company: booking.company,
+                            bookingRef: booking._id,
+                            bookingId: booking.bookingId,
+                            dayNo: dayNo,
+                            clientName: booking.clientName,
+                            mobileNumber: booking.mobileNumber,
+                            date: item.date ? new Date(item.date) : (booking.travelStartDate || new Date()),
+                            time: item.time || '09:00 AM',
+                            hotel: dutyHotel,
+                            pickupPoint: item.pickupPoint || booking.pickupPoint || '',
+                            duty: dutyText,
+                            itinerary: dutyText,
+                            carType: item.vehicleType || booking.vehicleType || 'Sedan',
+                            revenue: dutyRevenue,
+                            km: item.km || '',
+                            driver: (item.driverId && item.driverId !== 'custom' && item.driverId !== '__custom__') ? item.driverId : (item.driver || null),
+                            customDriverName: item.driverName || '',
+                            driverMobile: item.driverPhone || '',
+                            vehicle: (item.vehicleId && item.vehicleId !== 'custom' && item.vehicleId !== '__custom__') ? item.vehicleId : (item.vehicle || null),
+                            customCarNumber: item.vehicleNumber || '',
+                            paymentStatus: effectivePaymentStatus,
+                            status: 'Assigned',
+                            isDirectBooking: false
+                        });
+                        updatedDutyIds.push(newDuty._id);
+                    }
+                }
+
+                if (updatedDutyIds.length > 0) {
+                    const dutiesToRemove = existingDuties.filter(d => !updatedDutyIds.some(id => String(id) === String(d._id)));
+                    if (dutiesToRemove.length > 0) {
+                        await DRSDuty.deleteMany({ _id: { $in: dutiesToRemove.map(d => d._id) } });
+                    }
+                }
+                booking.drsDuties = updatedDutyIds;
+                await booking.save();
+            } else if (booking.travelStartDate) {
+                await DRSDuty.updateMany(dutyMatch, {
+                    $set: {
+                        date: booking.travelStartDate,
+                        hotel: booking.pickupPoint || booking.pickupLocation || booking.source || 'Direct',
+                        pickupPoint: booking.pickupPoint || '',
+                        revenue: booking.totalAmount
+                    }
+                });
+            }
         }
     } catch (drsSyncErr) {
         console.error('Error cascading booking update to DRS:', drsSyncErr);
@@ -709,11 +706,63 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
     }
 
     if (Array.isArray(itinerary)) {
-        booking.itinerary = itinerary;
+        const normalizedItinerary = itinerary.map((day, idx) => {
+            const dayNo = day.dayNo || (idx + 1);
+            const driverId = day.driverId && day.driverId !== 'custom' && day.driverId !== '__custom__' ? day.driverId : null;
+            const vehicleId = day.vehicleId && day.vehicleId !== 'custom' && day.vehicleId !== '__custom__' ? day.vehicleId : null;
+            const dutyText = day.duty || day.description || 'City Tour / Transfer';
+            return {
+                ...day,
+                dayNo,
+                date: day.date || booking.travelStartDate || new Date(),
+                time: day.isApg ? 'APG' : (day.time || '09:00 AM'),
+                isApg: !!(day.isApg || day.time === 'APG'),
+                pickupPoint: day.pickupPoint !== undefined ? day.pickupPoint : (booking.pickupPoint || booking.pickupLocation || ''),
+                duty: dutyText,
+                description: dutyText,
+                vehicleType: day.vehicleType || booking.vehicleType || 'Innova Crysta',
+                driver: driverId,
+                driverId: day.driverId || '',
+                driverName: day.driverName || day.customDriverName || '',
+                driverPhone: day.driverPhone || day.driverMobile || '',
+                vehicle: vehicleId,
+                vehicleId: day.vehicleId || '',
+                vehicleNumber: day.vehicleNumber || day.customCarNumber || '',
+                amount: day.amount !== undefined ? Number(day.amount) : (idx === 0 ? Number(booking.totalAmount) || 0 : 0),
+                km: day.km || ''
+            };
+        });
+
+        booking.itinerary = normalizedItinerary;
+        booking.markModified('itinerary');
+        if (normalizedItinerary[0]?.pickupPoint) {
+            booking.pickupPoint = normalizedItinerary[0].pickupPoint;
+            booking.pickupLocation = normalizedItinerary[0].pickupPoint;
+        }
+        if (normalizedItinerary[0]?.vehicleType) {
+            booking.vehicleType = normalizedItinerary[0].vehicleType;
+        }
         await booking.save();
 
-        // Sync each day into DRSDuty
-        for (const [idx, day] of itinerary.entries()) {
+        const matchConditions = [
+            { bookingRef: booking._id },
+            { bookingId: booking.bookingId }
+        ];
+        if (booking.clientCode) {
+            matchConditions.push({ bookingId: booking.clientCode });
+        }
+        if (booking.lead) {
+            matchConditions.push({ leadId: booking.lead });
+        }
+
+        const candidateDuties = await DRSDuty.find({ $or: matchConditions }).sort({ dayNo: 1, date: 1 });
+        const syncedDutyIds = [];
+
+        const effectivePaymentStatus = (booking.paymentStatus === 'Full Received' || booking.balanceDue <= 0)
+            ? 'Full Received'
+            : (booking.advancePaid > 0 ? 'Advance Received' : 'Pending');
+
+        for (const [idx, day] of normalizedItinerary.entries()) {
             const dayNo = day.dayNo || (idx + 1);
             let dateStr = null;
             if (day.date) {
@@ -722,28 +771,19 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 } catch (_) {}
             }
 
-            const driverId = day.driverId && day.driverId !== 'custom' && day.driverId !== '__custom__' ? day.driverId : null;
-            const driverName = day.driverName || day.customDriverName || '';
-            const driverPhone = day.driverPhone || day.driverMobile || '';
-            const vehicleId = day.vehicleId || day.vehicle || null;
-            const vehicleNumber = day.vehicleNumber || day.customCarNumber || '';
-            const isAssigned = !!(driverId || driverName);
+            const driverId = day.driver;
+            const driverName = day.driverName || '';
+            const driverPhone = day.driverPhone || '';
+            const vehicleId = day.vehicle;
+            const vehicleNumber = day.vehicleNumber || '';
+            const dutyText = day.duty || day.description || 'Scheduled Duty';
+            const hotelDisplay = day.pickupPoint || booking.pickupPoint || booking.source || 'Direct';
 
-            // Broad query to match duties created either during lead conversion or previous saves
-            const matchConditions = [
-                { bookingRef: booking._id },
-                { bookingId: booking.bookingId }
-            ];
-            if (booking.lead) {
-                matchConditions.push({ leadId: booking.lead });
-            }
-
-            let candidateDuties = await DRSDuty.find({ $or: matchConditions });
-
-            // Find matching candidate by dayNo or calendar date
-            let matchingDuty = candidateDuties.find(d => d.dayNo === dayNo);
+            // Match existing duty that hasn't already been claimed in this loop
+            let matchingDuty = candidateDuties.find(d => !syncedDutyIds.some(id => String(id) === String(d._id)) && d.dayNo === dayNo);
             if (!matchingDuty && dateStr) {
                 matchingDuty = candidateDuties.find(d => {
+                    if (syncedDutyIds.some(id => String(id) === String(d._id))) return false;
                     if (!d.date) return false;
                     try {
                         return new Date(d.date).toISOString().split('T')[0] === dateStr;
@@ -755,42 +795,40 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
 
             if (matchingDuty) {
                 matchingDuty.bookingRef = booking._id;
-                matchingDuty.bookingId = booking.bookingId;
+                matchingDuty.bookingId = booking.bookingId || booking.clientCode;
+                matchingDuty.leadId = booking.lead || matchingDuty.leadId || null;
+                matchingDuty.clientName = booking.clientName;
+                matchingDuty.mobileNumber = booking.mobileNumber;
                 matchingDuty.dayNo = dayNo;
+                if (day.date) matchingDuty.date = new Date(day.date);
+                matchingDuty.time = day.time || '09:00 AM';
+                matchingDuty.hotel = hotelDisplay;
+                matchingDuty.pickupPoint = day.pickupPoint || '';
+                matchingDuty.duty = dutyText;
+                matchingDuty.itinerary = dutyText;
+                matchingDuty.carType = day.vehicleType || booking.vehicleType || 'Innova Crysta';
                 matchingDuty.driver = driverId;
                 matchingDuty.customDriverName = driverName;
                 matchingDuty.driverMobile = driverPhone;
                 matchingDuty.vehicle = vehicleId;
                 matchingDuty.customCarNumber = vehicleNumber;
-                matchingDuty.status = isAssigned ? 'Assigned' : (matchingDuty.status || 'Scheduled');
-                if (day.time) matchingDuty.time = day.time;
-                if (day.duty || day.description) {
-                    matchingDuty.duty = day.duty || day.description;
-                    matchingDuty.itinerary = day.duty || day.description;
-                }
-                if (day.km) matchingDuty.km = day.km;
+                matchingDuty.revenue = day.amount !== undefined ? Number(day.amount) : matchingDuty.revenue;
+                matchingDuty.km = day.km || matchingDuty.km || '';
+                matchingDuty.paymentStatus = effectivePaymentStatus;
+                matchingDuty.status = 'Assigned';
                 await matchingDuty.save();
-
-                // Clean up any other duplicates for this same day
-                const duplicates = candidateDuties.filter(d => 
-                    String(d._id) !== String(matchingDuty._id) && 
-                    (d.dayNo === dayNo || (dateStr && d.date && new Date(d.date).toISOString().split('T')[0] === dateStr))
-                );
-                if (duplicates.length > 0) {
-                    const dupIds = duplicates.map(d => d._id);
-                    await DRSDuty.deleteMany({ _id: { $in: dupIds } });
-                }
+                syncedDutyIds.push(matchingDuty._id);
             } else {
-                const dutyText = day.duty || day.description || 'Scheduled Duty';
                 const newDuty = await DRSDuty.create({
                     company: booking.company,
                     bookingRef: booking._id,
-                    bookingId: booking.bookingId,
+                    bookingId: booking.bookingId || booking.clientCode,
                     leadId: booking.lead || null,
                     clientName: booking.clientName,
                     mobileNumber: booking.mobileNumber,
-                    date: day.date || booking.travelStartDate || new Date(),
+                    date: day.date ? new Date(day.date) : (booking.travelStartDate || new Date()),
                     time: day.time || '09:00 AM',
+                    hotel: hotelDisplay,
                     pickupPoint: day.pickupPoint || '',
                     duty: dutyText,
                     itinerary: dutyText,
@@ -803,21 +841,38 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     customCarNumber: vehicleNumber,
                     revenue: day.amount || 0,
                     km: day.km || '',
-                    paymentStatus: booking.paymentStatus === 'Full Received' ? 'Full Received' : 'Advance Received',
-                    status: isAssigned ? 'Assigned' : 'Scheduled',
+                    paymentStatus: effectivePaymentStatus,
+                    status: 'Assigned',
                     isDirectBooking: false
                 });
-
-                if (!booking.drsDuties) booking.drsDuties = [];
-                booking.drsDuties.push(newDuty._id);
-                await booking.save();
+                syncedDutyIds.push(newDuty._id);
             }
         }
+
+        // Delete any old/duplicate DRSDuty records for this booking that are no longer in syncedDutyIds
+        const staleDuties = candidateDuties.filter(d => !syncedDutyIds.some(id => String(id) === String(d._id)));
+        if (staleDuties.length > 0) {
+            await DRSDuty.deleteMany({ _id: { $in: staleDuties.map(d => d._id) } });
+        }
+
+        booking.drsDuties = syncedDutyIds;
+        await booking.save();
     }
 
+    const updatedBooking = await Booking.findById(booking._id)
+        .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks')
+        .populate('client', 'name mobile balance')
+        .populate({
+            path: 'drsDuties',
+            populate: [
+                { path: 'driver', select: 'name mobile phone' },
+                { path: 'vehicle', select: 'carNumber model type' }
+            ]
+        });
+
     res.json({
-        message: 'Driver assignments saved and synced to DRS successfully',
-        booking
+        message: 'Driver & vehicle assignments saved and synced to Live DRS successfully',
+        booking: updatedBooking
     });
 });
 

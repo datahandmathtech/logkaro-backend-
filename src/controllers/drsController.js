@@ -335,40 +335,57 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     const oldClientName = duty.clientName;
     const oldMobile = duty.mobileNumber;
 
+    const updatePayload = { ...req.body };
+    if (updatePayload.bookingRef && typeof updatePayload.bookingRef === 'object' && updatePayload.bookingRef._id) {
+        updatePayload.bookingRef = updatePayload.bookingRef._id;
+    }
+    if (updatePayload.leadId && typeof updatePayload.leadId === 'object' && updatePayload.leadId._id) {
+        updatePayload.leadId = updatePayload.leadId._id;
+    }
+    if (updatePayload.duty !== undefined) {
+        updatePayload.itinerary = updatePayload.duty;
+    }
+    if (updatePayload.hotel !== undefined && updatePayload.pickupPoint === undefined) {
+        updatePayload.pickupPoint = updatePayload.hotel;
+    }
+
     const updatedDuty = await DRSDuty.findByIdAndUpdate(
         req.params.id,
-        req.body,
+        updatePayload,
         { new: true, runValidators: true }
     )
-    .populate('driver', 'name mobile')
+    .populate('driver', 'name mobile phone')
     .populate('vehicle', 'carNumber model type brand')
     .populate('leadId', 'clientName leadId status')
     .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid balanceDue bookingStatus');
 
     const clientNameChanged = updatedDuty.clientName && updatedDuty.clientName !== oldClientName;
     const mobileChanged = updatedDuty.mobileNumber && updatedDuty.mobileNumber !== oldMobile;
+    const bkgRefId = updatedDuty.bookingRef?._id || updatedDuty.bookingRef || duty.bookingRef;
 
     // -------------------------------------------------------------
     // CASCADE SYNC 1: SIBLING DRS DUTIES (Same booking/client)
     // -------------------------------------------------------------
     try {
         if (clientNameChanged || mobileChanged) {
-            if (updatedDuty.bookingRef || updatedDuty.bookingId) {
-                await DRSDuty.updateMany(
-                    {
-                        _id: { $ne: updatedDuty._id },
-                        $or: [
-                            { bookingRef: updatedDuty.bookingRef },
-                            { bookingId: updatedDuty.bookingId }
-                        ]
-                    },
-                    {
-                        $set: {
-                            ...(clientNameChanged && { clientName: updatedDuty.clientName }),
-                            ...(mobileChanged && { mobileNumber: updatedDuty.mobileNumber })
+            if (bkgRefId || updatedDuty.bookingId) {
+                const sibOr = [];
+                if (bkgRefId) sibOr.push({ bookingRef: bkgRefId });
+                if (updatedDuty.bookingId) sibOr.push({ bookingId: updatedDuty.bookingId });
+                if (sibOr.length > 0) {
+                    await DRSDuty.updateMany(
+                        {
+                            _id: { $ne: updatedDuty._id },
+                            $or: sibOr
+                        },
+                        {
+                            $set: {
+                                ...(clientNameChanged && { clientName: updatedDuty.clientName }),
+                                ...(mobileChanged && { mobileNumber: updatedDuty.mobileNumber })
+                            }
                         }
-                    }
-                );
+                    );
+                }
             }
         }
     } catch (sibErr) {
@@ -376,16 +393,17 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     }
 
     // -------------------------------------------------------------
-    // CASCADE SYNC 2: CONFIRMED BOOKING
+    // CASCADE SYNC 2: CONFIRMED BOOKING (Full 2-Way Sync)
     // -------------------------------------------------------------
-    if (updatedDuty.bookingRef || updatedDuty.bookingId) {
+    if (bkgRefId || updatedDuty.bookingId) {
         try {
-            const bkg = await Booking.findOne({
-                $or: [
-                    { _id: updatedDuty.bookingRef },
-                    { bookingId: updatedDuty.bookingId }
-                ]
-            });
+            const bkgOr = [];
+            if (bkgRefId) bkgOr.push({ _id: bkgRefId });
+            if (updatedDuty.bookingId) {
+                bkgOr.push({ bookingId: updatedDuty.bookingId });
+                bkgOr.push({ clientCode: updatedDuty.bookingId });
+            }
+            const bkg = await Booking.findOne({ $or: bkgOr });
             if (bkg) {
                 if (updatedDuty.clientName) bkg.clientName = updatedDuty.clientName;
                 if (updatedDuty.mobileNumber) bkg.mobileNumber = updatedDuty.mobileNumber;
@@ -397,43 +415,87 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                     bkg.vehicleType = updatedDuty.carType;
                 }
 
-                // Sync itinerary day in booking
+                const dutyDate = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
+                const effectiveDriverId = updatedDuty.driver?._id ? String(updatedDuty.driver._id) : (updatedDuty.driver ? String(updatedDuty.driver) : (updatedDuty.customDriverName ? 'custom' : ''));
+                const effectiveDriverName = updatedDuty.customDriverName || updatedDuty.driver?.name || '';
+                const effectiveDriverPhone = updatedDuty.driverMobile || updatedDuty.driver?.mobile || updatedDuty.driver?.phone || '';
+                const effectiveVehicleId = updatedDuty.vehicle?._id ? String(updatedDuty.vehicle._id) : (updatedDuty.vehicle ? String(updatedDuty.vehicle) : '');
+                const effectiveVehicleNumber = updatedDuty.customCarNumber || updatedDuty.vehicle?.carNumber || '';
+
                 if (Array.isArray(bkg.itinerary) && bkg.itinerary.length > 0) {
-                    const dutyDate = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
                     let matched = false;
-                    bkg.itinerary = bkg.itinerary.map(item => {
-                        const itemDate = item.date ? new Date(item.date).toISOString().split('T')[0] : '';
-                        if (item.dayNo === updatedDuty.dayNo || (dutyDate && itemDate === dutyDate)) {
+                    bkg.itinerary = bkg.itinerary.map((item, idx) => {
+                        const plainItem = item.toObject ? item.toObject() : { ...item };
+                        const itemDate = plainItem.date ? new Date(plainItem.date).toISOString().split('T')[0] : '';
+                        const itemDayNo = plainItem.dayNo || (idx + 1);
+                        if ((updatedDuty.dayNo && itemDayNo === updatedDuty.dayNo) || (dutyDate && itemDate === dutyDate)) {
                             matched = true;
                             return {
-                                ...item,
-                                duty: updatedDuty.duty || updatedDuty.itinerary || item.duty,
-                                description: updatedDuty.duty || updatedDuty.itinerary || item.description,
-                                time: updatedDuty.time || item.time,
-                                pickupPoint: updatedDuty.hotel || updatedDuty.pickupPoint || item.pickupPoint,
-                                vehicleType: updatedDuty.carType || item.vehicleType,
-                                amount: updatedDuty.revenue !== undefined ? Number(updatedDuty.revenue) : item.amount,
+                                ...plainItem,
+                                date: updatedDuty.date || plainItem.date,
+                                duty: updatedDuty.duty || updatedDuty.itinerary || plainItem.duty,
+                                description: updatedDuty.duty || updatedDuty.itinerary || plainItem.description,
+                                time: updatedDuty.time || plainItem.time,
+                                isApg: (updatedDuty.time || plainItem.time) === 'APG',
+                                pickupPoint: updatedDuty.hotel || updatedDuty.pickupPoint || plainItem.pickupPoint || '',
+                                vehicleType: updatedDuty.carType || plainItem.vehicleType,
+                                km: updatedDuty.km !== undefined ? updatedDuty.km : (plainItem.km || ''),
+                                amount: (updatedDuty.revenue !== undefined && Number(updatedDuty.revenue) > 0) ? Number(updatedDuty.revenue) : plainItem.amount,
                                 driver: updatedDuty.driver?._id || updatedDuty.driver || null,
-                                driverId: updatedDuty.driver?._id || updatedDuty.driver || '',
-                                driverName: updatedDuty.driver?.name || updatedDuty.customDriverName || item.driverName || '',
-                                driverPhone: updatedDuty.driver?.mobile || updatedDuty.driverMobile || item.driverPhone || '',
+                                driverId: effectiveDriverId,
+                                driverName: effectiveDriverName,
+                                driverPhone: effectiveDriverPhone,
                                 vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
-                                vehicleId: updatedDuty.vehicle?._id || updatedDuty.vehicle || '',
-                                vehicleNumber: updatedDuty.vehicle?.carNumber || updatedDuty.customCarNumber || item.vehicleNumber || ''
+                                vehicleId: effectiveVehicleId,
+                                vehicleNumber: effectiveVehicleNumber
                             };
                         }
-                        return item;
+                        return plainItem;
                     });
 
-                    // Recalculate total amount from all itinerary days
-                    const newTotal = bkg.itinerary.reduce((acc, curr) => acc + (Number(curr.amount) || Number(curr.rate) || 0), 0);
-                    if (newTotal > 0) {
-                        bkg.totalAmount = newTotal;
-                        bkg.balanceDue = Math.max(0, bkg.totalAmount - (bkg.advancePaid || 0));
+                    if (!matched) {
+                        bkg.itinerary.push({
+                            dayNo: updatedDuty.dayNo || (bkg.itinerary.length + 1),
+                            date: updatedDuty.date || bkg.travelStartDate || new Date(),
+                            time: updatedDuty.time || '09:00 AM',
+                            isApg: updatedDuty.time === 'APG',
+                            pickupPoint: updatedDuty.hotel || updatedDuty.pickupPoint || '',
+                            duty: updatedDuty.duty || updatedDuty.itinerary || 'Scheduled Duty',
+                            description: updatedDuty.duty || updatedDuty.itinerary || 'Scheduled Duty',
+                            vehicleType: updatedDuty.carType || bkg.vehicleType || 'Innova Crysta',
+                            km: updatedDuty.km || '',
+                            amount: Number(updatedDuty.revenue) || 0,
+                            driver: updatedDuty.driver?._id || updatedDuty.driver || null,
+                            driverId: effectiveDriverId,
+                            driverName: effectiveDriverName,
+                            driverPhone: effectiveDriverPhone,
+                            vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
+                            vehicleId: effectiveVehicleId,
+                            vehicleNumber: effectiveVehicleNumber
+                        });
                     }
-                } else if (updatedDuty.revenue !== undefined && Number(updatedDuty.revenue) > 0) {
-                    bkg.totalAmount = Number(updatedDuty.revenue);
-                    bkg.balanceDue = Math.max(0, bkg.totalAmount - (bkg.advancePaid || 0));
+                    bkg.markModified('itinerary');
+                } else {
+                    bkg.itinerary = [{
+                        dayNo: updatedDuty.dayNo || 1,
+                        date: updatedDuty.date || bkg.travelStartDate || new Date(),
+                        time: updatedDuty.time || '09:00 AM',
+                        isApg: updatedDuty.time === 'APG',
+                        pickupPoint: updatedDuty.hotel || updatedDuty.pickupPoint || '',
+                        duty: updatedDuty.duty || updatedDuty.itinerary || 'Scheduled Duty',
+                        description: updatedDuty.duty || updatedDuty.itinerary || 'Scheduled Duty',
+                        vehicleType: updatedDuty.carType || bkg.vehicleType || 'Innova Crysta',
+                        km: updatedDuty.km || '',
+                        amount: Number(updatedDuty.revenue) || bkg.totalAmount || 0,
+                        driver: updatedDuty.driver?._id || updatedDuty.driver || null,
+                        driverId: effectiveDriverId,
+                        driverName: effectiveDriverName,
+                        driverPhone: effectiveDriverPhone,
+                        vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
+                        vehicleId: effectiveVehicleId,
+                        vehicleNumber: effectiveVehicleNumber
+                    }];
+                    bkg.markModified('itinerary');
                 }
 
                 await bkg.save();

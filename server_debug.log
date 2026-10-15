@@ -1010,3 +1010,96 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-09-19T11:09:29.923Z] Login request for: Test100
 [2026-09-19T11:09:29.954Z] Login failed: User [Test100] not found in standard lookup.
 [2026-09-19T11:09:30.057Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-10-15T10:20:12.369Z] CRON: Cron Jobs Initialized
+[2026-10-15T10:21:18.994Z] Login attempt started
+[2026-10-15T10:21:18.995Z] Login request for: Bharat
+[2026-10-15T10:21:19.045Z] User found: Bharat  (Role: Driver)
+[2026-10-15T10:21:19.143Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$rmG, isMatch=false
+[2026-10-15T10:21:19.143Z] Invalid credentials
+[2026-10-15T10:21:54.696Z] Login attempt started
+[2026-10-15T10:21:54.697Z] Login request for: Bharat
+[2026-10-15T10:21:54.846Z] User found: Bharat  (Role: Driver)
+[2026-10-15T10:21:54.944Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$rmG, isMatch=false
+[2026-10-15T10:21:54.944Z] Invalid credentials
+[2026-10-15T10:22:21.230Z] Login attempt started
+[2026-10-15T10:22:21.230Z] Login request for: Piyush123
+[2026-10-15T10:22:21.284Z] User found: Piyush Menaria (Role: Driver)
+[2026-10-15T10:22:21.402Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$7zU, isMatch=true
+[2026-10-15T10:22:21.403Z] Password matched
+[2026-10-15T10:22:21.403Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T10:22:22.033Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-15T10:22:22.080Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-15T10:22:22.136Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-15T10:23:32.444Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-15T10:23:32.510Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-15T10:23:32.564Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-15T10:23:48.054Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-15T10:23:48.108Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-15T10:23:48.164Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-15T10:34:13.488Z] Login attempt started
+[2026-10-15T10:34:13.489Z] Login request for: Kavishuser1
+[2026-10-15T10:34:13.539Z] User found: Yatree (Role: Admin)
+[2026-10-15T10:34:13.627Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-15T10:34:13.628Z] Password matched
+[2026-10-15T10:34:13.628Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T10:34:19.604Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T10:34:28.404Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T10:34:48.897Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T10:39:20.202Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:03:07.975Z] CRON: Cron Jobs Initialized
+[2026-10-15T11:03:22.558Z] CRON: Cron Jobs Initialized
+[2026-10-15T11:03:30.521Z] CRON: Cron Jobs Initialized
+[2026-10-15T11:05:28.585Z] Login attempt started
+[2026-10-15T11:05:28.586Z] Login request for: Kavishuser1
+[2026-10-15T11:05:28.940Z] User found: Yatree (Role: Admin)
+[2026-10-15T11:05:29.155Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-15T11:05:29.178Z] Password matched
+[2026-10-15T11:05:29.179Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T11:05:38.097Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:05:38.108Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-15T11:05:39.719Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:05:40.608Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-15T11:05:40.625Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:05:54.571Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:06:25.071Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:06:34.278Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:06:49.630Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:07:14.392Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:07:19.318Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:07:25.031Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:07:34.588Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:08:09.166Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:08:16.437Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:08:30.330Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:08:37.311Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:09:04.670Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443"}
+[2026-10-15T11:09:04.829Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443"}
+[2026-10-15T11:09:04.917Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443"}
+[2026-10-15T11:09:06.565Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:09:24.394Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:09:33.335Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:09:42.440Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T11:18:45.297Z] CRON: Cron Jobs Initialized
+[2026-10-15T11:38:59.584Z] Login attempt started
+[2026-10-15T11:38:59.585Z] Login request for: Kavishuser1
+[2026-10-15T11:38:59.694Z] User found: Yatree (Role: Admin)
+[2026-10-15T11:38:59.820Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-15T11:38:59.820Z] Password matched
+[2026-10-15T11:38:59.821Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T11:45:16.023Z] CRON: Cron Jobs Initialized
+[2026-10-15T11:45:26.074Z] CRON: Cron Jobs Initialized
+[2026-10-15T11:47:22.914Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T12:08:56.787Z] CRON: Cron Jobs Initialized
+[2026-10-15T12:10:50.465Z] CRON: Cron Jobs Initialized
+[2026-10-15T12:11:43.974Z] CRON: Cron Jobs Initialized
+[2026-10-15T12:12:50.730Z] CRON: Cron Jobs Initialized
+[2026-10-15T12:18:31.793Z] Login attempt started
+[2026-10-15T12:18:31.794Z] Login request for: Kavishuser1
+[2026-10-15T12:18:32.107Z] User found: Yatree (Role: Admin)
+[2026-10-15T12:18:32.335Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-15T12:18:32.336Z] Password matched
+[2026-10-15T12:18:32.336Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T12:18:38.507Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T12:19:25.332Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T12:22:00.199Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T12:22:27.960Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
