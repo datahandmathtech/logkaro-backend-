@@ -47,9 +47,15 @@ const protect = async (req, res, next) => {
             return next();
         } catch (error) {
             console.error('AUTH ERROR:', error.message);
-            let errorMessage = 'Not authorized, token failed';
-            if (error.name === 'TokenExpiredError') errorMessage = 'Session expired. Please log in again.';
-            return res.status(401).json({ message: errorMessage });
+            if (error.name === 'TokenExpiredError') {
+                return res.status(401).json({ message: 'Session expired. Please log in again.' });
+            }
+            if (error.name === 'JsonWebTokenError' || error.name === 'NotBeforeError') {
+                return res.status(401).json({ message: 'Not authorized, token failed' });
+            }
+            return res.status(503).json({
+                message: 'Database connection unavailable. Please check MongoDB Atlas IP whitelist (0.0.0.0/0).'
+            });
         }
     }
 

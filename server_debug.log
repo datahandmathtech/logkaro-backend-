@@ -1143,3 +1143,35 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-10-15T16:06:35.783Z] Login attempt started
 [2026-10-15T16:06:35.783Z] Login request for: Kavishuser1
 [2026-10-15T16:06:35.783Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:10:25.947Z] Login attempt started
+[2026-10-15T16:10:25.948Z] Login request for: Kavishuser1
+[2026-10-15T16:10:25.949Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:10:40.629Z] Login attempt started
+[2026-10-15T16:10:40.630Z] Login request for: Kavishuser1
+[2026-10-15T16:10:40.630Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:10:44.150Z] Login attempt started
+[2026-10-15T16:10:44.150Z] Login request for: Kavishuser1
+[2026-10-15T16:10:44.151Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:15:27.398Z] CRON: Cron Jobs Initialized
+[2026-10-15T16:17:13.460Z] Login attempt started
+[2026-10-15T16:17:13.461Z] Login request for: Kavishuser1
+[2026-10-15T16:17:13.462Z] Database is connecting... waiting for ready state.
+[2026-10-15T16:17:18.519Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:17:22.784Z] Login attempt started
+[2026-10-15T16:17:22.784Z] Login request for: Kavishuser1
+[2026-10-15T16:17:22.785Z] Database is connecting... waiting for ready state.
+[2026-10-15T16:17:27.801Z] Login aborted: Database not connected (Current State: Connecting)
+[2026-10-15T16:21:00.182Z] CRON: Cron Jobs Initialized
+[2026-10-15T16:22:52.623Z] Login attempt started
+[2026-10-15T16:22:52.624Z] Login request for: Kavishuser1
+[2026-10-15T16:22:52.625Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:22:56.157Z] Login attempt started
+[2026-10-15T16:22:56.157Z] Login request for: Kavishuser1
+[2026-10-15T16:22:56.158Z] Database is connecting... waiting for ready state.
+[2026-10-15T16:23:01.216Z] Login aborted: Database not connected (Current State: Connecting)
+[2026-10-15T16:37:37.685Z] Login attempt started
+[2026-10-15T16:37:37.686Z] Login request for: Kavishuser1
+[2026-10-15T16:37:37.991Z] User found: Yatree (Role: Admin)
+[2026-10-15T16:37:38.079Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-15T16:37:38.080Z] Password matched
+[2026-10-15T16:37:38.080Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
