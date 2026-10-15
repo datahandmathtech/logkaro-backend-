@@ -728,13 +728,18 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 vehicle: vehicleId,
                 vehicleId: day.vehicleId || '',
                 vehicleNumber: day.vehicleNumber || day.customCarNumber || '',
-                amount: day.amount !== undefined ? Number(day.amount) : (idx === 0 ? Number(booking.totalAmount) || 0 : 0),
+                amount: day.amount !== undefined && day.amount !== '' ? Number(day.amount) : 0,
                 km: day.km || ''
             };
         });
 
         booking.itinerary = normalizedItinerary;
         booking.markModified('itinerary');
+        const sumDayAmounts = normalizedItinerary.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
+        if (sumDayAmounts > 0) {
+            booking.totalAmount = sumDayAmounts;
+            booking.balanceDue = Math.max(0, sumDayAmounts - (Number(booking.advancePaid) || 0));
+        }
         if (normalizedItinerary[0]?.pickupPoint) {
             booking.pickupPoint = normalizedItinerary[0].pickupPoint;
             booking.pickupLocation = normalizedItinerary[0].pickupPoint;
