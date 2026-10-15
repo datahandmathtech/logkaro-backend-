@@ -3200,7 +3200,7 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
         maintenanceType,
         category,
         partsChanged: partsChanged ? (typeof partsChanged === 'string' ? JSON.parse(partsChanged) : partsChanged) : [],
-        description,
+        description: description || req.body.remarks || '',
         garageName,
         billNumber,
         billDate,
@@ -3421,56 +3421,43 @@ const getMaintenanceRecords = asyncHandler(async (req, res) => {
             }
         });
     });
+    const isDriverServiceRecord = (r) => {
+        const cat = String(r.category || '').toLowerCase();
+        const desc = String(r.description || '').toLowerCase();
+        const mType = String(r.maintenanceType || '').toLowerCase();
+        const source = String(r.source || '').toLowerCase();
+
+        // If explicitly driver app or source driver
+        if (source === 'driver app' || source === 'driver') return true;
+
+        // Mechanical workshop keywords: NEVER an operational driver service
+        const isMechanical = /engine|clutch|gear|suspension|brake|timing belt|radiator|alternator|overhaul|periodic service|general servicing|oil filter|air filter|fuel filter/i.test(cat + ' ' + desc);
+        if (isMechanical) return false;
+
+        // Driver services type or operational car service
+        if (mType === 'driver services' || mType === 'driver service' || mType === 'car service') return true;
+
+        // Operational categories
+        const isWash = cat.includes('wash') || desc.includes('wash');
+        const isPuncture = cat.includes('punc') || desc.includes('punc');
+        const isTissue = cat.includes('tissue') || desc.includes('tissue');
+        const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('leak') && !cat.includes('pump')) ||
+            (desc.includes('water') && !desc.includes('repair') && !desc.includes('leak') && !desc.includes('pump'));
+        const isDriverCleaning = cat.includes('cleaning supplies') || desc.includes('cleaning supplies');
+        const isChallan = cat.includes('challan') || desc.includes('challan') || cat.includes('penalty') || desc.includes('penalty');
+        const isOtherMisc = cat.includes('other misc') || desc.includes('other misc') || cat.includes('other service');
+
+        return isWash || isPuncture || isTissue || isWater || isDriverCleaning || isChallan || isOtherMisc;
+    };
+
     let combined = [];
 
     if (requestType === 'driver_services') {
-        const driverServiceRecords = mainRecords.filter(r => {
-            const cat = String(r.category || '').toLowerCase();
-            const desc = String(r.description || '').toLowerCase();
-            const mType = String(r.maintenanceType || '').toLowerCase();
-            const source = String(r.source || '').toLowerCase();
-
-            if (source === 'driver app' || source === 'driver') return true;
-            if (mType === 'driver services' || mType === 'driver service') return true;
-
-            // Operational services: Wash, Puncture, Tissue, Water
-            const isWash = cat.includes('wash') || desc.includes('wash');
-            const isPuncture = cat.includes('punc') || desc.includes('punc');
-            const isTissue = cat.includes('tissue') || desc.includes('tissue');
-            const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('leak') && !cat.includes('pump')) ||
-                (desc.includes('water') && !desc.includes('repair') && !desc.includes('leak') && !desc.includes('pump'));
-
-            // Catch anything explicitly marked as an operational service, 
-            // BUT EXCLUDE mechanical repairs (even if they use the word 'service' like 'Periodic Service')
-            const isExplicitService = mType.includes('service') && !mType.includes('regular') && !mType.includes('fleet');
-            const isMechanical = /oil|fan|engine|brake|clutch|gear|mechanical|electrical|suspension|tyre|tire|battery|coolant|labour|labor|parts|ac /i.test(cat) ||
-                /oil|fan|engine|brake|clutch|gear|mechanical|electrical|suspension|tyre|tire|battery|coolant|labour|labor|parts|ac /i.test(desc);
-
-            return isWash || isPuncture || isTissue || isWater || (isExplicitService && !isMechanical);
-        });
-
+        const driverServiceRecords = mainRecords.filter(isDriverServiceRecord);
         combined = [...driverServiceRecords, ...mappedParking, ...mappedPending];
     } else {
         // Exclude ALL driver services, driver app entries, parking, and operational driver items from workshop maintenance
-        combined = mainRecords.filter(r => {
-            const cat = String(r.category || '').toLowerCase();
-            const desc = String(r.description || '').toLowerCase();
-            const mType = String(r.maintenanceType || '').toLowerCase();
-            const source = String(r.source || '').toLowerCase();
-
-            if (source === 'driver app' || source === 'driver') return false;
-            if (mType === 'driver services' || mType === 'driver service') return false;
-
-            const isWash = cat.includes('wash') || desc.includes('wash');
-            const isPuncture = cat.includes('punc') || desc.includes('punc');
-            const isTissue = cat.includes('tissue') || desc.includes('tissue');
-            const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('pump') && !cat.includes('coolant')) ||
-                (desc.includes('water') && !desc.includes('repair') && !desc.includes('pump') && !desc.includes('coolant'));
-            const isDriverCleaning = cat.includes('cleaning supplies') || desc.includes('cleaning supplies');
-
-            if (isWash || isPuncture || isTissue || isWater || isDriverCleaning) return false;
-            return true;
-        });
+        combined = mainRecords.filter(r => !isDriverServiceRecord(r));
     }
 
     combined.sort((a, b) => new Date(b.billDate) - new Date(a.billDate));
@@ -3552,7 +3539,7 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
         if (maintenanceType) targetDoc.maintenanceType = maintenanceType;
         if (category) targetDoc.category = category;
         if (partsChanged) targetDoc.partsChanged = (typeof partsChanged === 'string' ? JSON.parse(partsChanged) : partsChanged);
-        if (description) targetDoc.description = description;
+        if (description || req.body.remarks !== undefined) targetDoc.description = description || req.body.remarks || '';
         if (garageName) targetDoc.garageName = garageName;
         if (billNumber) targetDoc.billNumber = billNumber;
         if (billDate) targetDoc.billDate = billDate;
