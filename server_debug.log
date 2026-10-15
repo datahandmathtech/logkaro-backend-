@@ -1117,3 +1117,29 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-10-15T12:39:07.787Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-10-15T12:39:43.386Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-10-15T12:40:04.089Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T15:46:29.572Z] CRON: Cron Jobs Initialized
+[2026-10-15T15:50:12.684Z] Login attempt started
+[2026-10-15T15:50:12.685Z] Login request for: Kavishuser1
+[2026-10-15T15:50:13.599Z] User found: Yatree (Role: Admin)
+[2026-10-15T15:50:13.803Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-15T15:50:13.803Z] Password matched
+[2026-10-15T15:50:13.804Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T15:50:35.078Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-15T16:04:15.227Z] Login attempt started
+[2026-10-15T16:04:15.228Z] Login request for: Kavishuser1
+[2026-10-15T16:04:15.229Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:04:18.771Z] Login attempt started
+[2026-10-15T16:04:18.771Z] Login request for: Kavishuser1
+[2026-10-15T16:04:18.772Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:04:34.018Z] Login attempt started
+[2026-10-15T16:04:34.019Z] Login request for: Kavishuser1
+[2026-10-15T16:04:34.020Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:04:37.554Z] Login attempt started
+[2026-10-15T16:04:37.555Z] Login request for: Kavishuser1
+[2026-10-15T16:04:37.555Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:06:31.616Z] Login attempt started
+[2026-10-15T16:06:31.617Z] Login request for: Kavishuser1
+[2026-10-15T16:06:31.617Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-15T16:06:35.783Z] Login attempt started
+[2026-10-15T16:06:35.783Z] Login request for: Kavishuser1
+[2026-10-15T16:06:35.783Z] Login aborted: Database not connected (Current State: Disconnected)
