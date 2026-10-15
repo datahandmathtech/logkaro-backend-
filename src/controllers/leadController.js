@@ -113,20 +113,25 @@ const getLeads = asyncHandler(async (req, res) => {
                 return isMatchMonth(lead.travelStartDate);
             }
 
-            // 1. Client Code / Lead ID prefix: Determine month strictly from Lead ID / Client Code (e.g. "10/01" -> Oct, "11/01" -> Nov, "09/01" -> Sep)
+            // 1. Tour Travel Date: If tour travels in this month (e.g. advance bookings for Nov, Dec, Jan...)
+            if (isMatchMonth(lead.travelStartDate)) {
+                return true;
+            }
+
+            // 2. Client Code prefix: If enquiry arrived in this month (e.g. "10/01" -> Oct, "11/01" -> Nov, "09/01" -> Sep)
             const code = String(lead.clientCode || lead.leadId || '').trim();
             const codeMatch = code.match(/^(\d{1,2})\//);
             if (codeMatch) {
                 const codeMonth = String(parseInt(codeMatch[1], 10)).padStart(2, '0');
-                return codeMonth === mStr;
+                if (codeMonth === mStr) return true;
             }
 
-            // 2. Fallback for leads without MM/SS clientCode: use leadDate (Enquiry date)
+            // 3. Fallback for leads without MM/SS clientCode: use leadDate (Enquiry date)
             if (lead.leadDate && isMatchMonth(lead.leadDate)) {
                 return true;
             }
 
-            // 3. Fallback to createdAt
+            // 4. Fallback to createdAt
             if (lead.createdAt && isMatchMonth(lead.createdAt)) {
                 return true;
             }
