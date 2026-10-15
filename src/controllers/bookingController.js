@@ -17,6 +17,11 @@ const getBookings = asyncHandler(async (req, res) => {
 
     if (status && status !== 'All') {
         query.bookingStatus = status;
+        if (status === 'Completed' && !startDate && !endDate) {
+            const todayEnd = new Date();
+            todayEnd.setHours(23, 59, 59, 999);
+            query.travelStartDate = { $lte: todayEnd };
+        }
     }
 
     if (paymentStatus && paymentStatus !== 'All') {
@@ -447,7 +452,7 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
 
     if (booking.balanceDue <= 0) {
         booking.paymentStatus = 'Full Received';
-        booking.bookingStatus = 'Completed'; // Auto-complete on full payment
+        // Note: Do not auto-complete bookingStatus on full payment (full advance payment does not mean trip is completed)
     } else {
         booking.paymentStatus = 'Partial';
     }
