@@ -773,7 +773,9 @@ const getAllDrivers = asyncHandler(async (req, res) => {
         }
 
         if (req.query.driverType) {
-            if (req.query.driverType !== 'All') {
+            if (req.query.driverType === 'Taxi') {
+                driverQuery.driverType = { $ne: 'Bus' };
+            } else if (req.query.driverType !== 'All') {
                 driverQuery.driverType = req.query.driverType;
             }
         } else {
@@ -4802,15 +4804,20 @@ const getAdvances = asyncHandler(async (req, res) => {
         const endDate = DateTime.fromISO(to, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
         query.date = { $gte: startDate, $lte: endDate };
     } else if (month && year) {
-        const m = parseInt(month);
-        const y = parseInt(year);
-        // Try to match either the transaction date OR the targeted month/year fields
+        const m = parseInt(month, 10);
+        const y = parseInt(year, 10);
+        // Try to match targeted month/year fields first, fallback to transaction date only if month not set
         const startOfMonth = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).startOf('month').toJSDate();
         const endOfMonth = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).endOf('month').toJSDate();
         
         query.$or = [
-            { date: { $gte: startOfMonth, $lte: endOfMonth } },
-            { month: m, year: y }
+            { month: m, year: y },
+            {
+                $and: [
+                    { $or: [{ month: { $exists: false } }, { month: null }] },
+                    { date: { $gte: startOfMonth, $lte: endOfMonth } }
+                ]
+            }
         ];
     }
 
@@ -4822,7 +4829,7 @@ const getAdvances = asyncHandler(async (req, res) => {
     const advances = await Advance.find(query)
         .populate({
             path: 'driver',
-            select: 'name mobile isFreelancer'
+            select: 'name mobile isFreelancer driverType status'
         })
         .populate({
             path: 'staff',
@@ -5025,7 +5032,7 @@ const getAllowances = asyncHandler(async (req, res) => {
         query.date = { $gte: start, $lte: end };
     }
 
-    const allowances = await Allowance.find(query).populate('driver', 'name mobile').sort({ date: -1 });
+    const allowances = await Allowance.find(query).populate('driver', 'name mobile driverType status isFreelancer').sort({ date: -1 });
     res.json(allowances);
 });
 
@@ -5169,7 +5176,12 @@ const getDriverSalarySummaryInternal = async (companyId, month, year, isFreelanc
         const y = parseInt(year, 10);
         advanceQuery.$or = [
             { month: m, year: y },
-            { month: { $exists: false }, date: { $gte: startJS, $lte: endJS } }
+            {
+                $and: [
+                    { $or: [{ month: { $exists: false } }, { month: null }] },
+                    { date: { $gte: startJS, $lte: endJS } }
+                ]
+            }
         ];
     } else if (startJS) {
         advanceQuery.date = { $gte: startJS, $lte: endJS };
@@ -7077,11 +7089,26 @@ const getDriverSalaryDetails = asyncHandler(async (req, res) => {
         }).sort({ date: 1 });
 
         // 3. Fetch Advances
-        const advances = await Advance.find({
+        const advanceFilter = {
             driver: driverId,
-            date: { $gte: startOfMonth, $lte: endOfMonth },
             remark: { $not: /Auto Generated|Daily Salary|Manual Duty Salary|Freelancer Daily Salary/ }
-        });
+        };
+        if (month && year) {
+            const m = parseInt(month, 10);
+            const y = parseInt(year, 10);
+            advanceFilter.$or = [
+                { month: m, year: y },
+                {
+                    $and: [
+                        { $or: [{ month: { $exists: false } }, { month: null }] },
+                        { date: { $gte: startOfMonth, $lte: endOfMonth } }
+                    ]
+                }
+            ];
+        } else {
+            advanceFilter.date = { $gte: startOfMonth, $lte: endOfMonth };
+        }
+        const advances = await Advance.find(advanceFilter).sort({ date: 1 });
 
         // 4. Fetch Loans (to show tenure/EMI in PDF/UI)
         const loanQuery = {
@@ -8111,7 +8138,7 @@ const getLiveFeed = asyncHandler(async (req, res) => {
 
 const getAllLoans = asyncHandler(async (req, res) => {
     const { companyId } = req.params;
-    const loans = await Loan.find({ company: companyId }).populate('driver', 'name mobile').sort({ createdAt: -1 });
+    const loans = await Loan.find({ company: companyId }).populate('driver', 'name mobile driverType status isFreelancer').sort({ createdAt: -1 });
     res.json(loans);
 });
 

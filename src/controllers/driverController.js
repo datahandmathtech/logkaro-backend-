@@ -615,7 +615,19 @@ const getDriverLedger = async (req, res) => {
             driver: driverId,
             remark: { $not: /Auto Generated|Daily Salary|Manual Duty Salary|Freelancer Daily Salary/ }
         };
-        if (startJS && endJS) {
+        if (month && year) {
+            const m = parseInt(month, 10);
+            const y = parseInt(year, 10);
+            advanceFilter.$or = [
+                { month: m, year: y },
+                {
+                    $and: [
+                        { $or: [{ month: { $exists: false } }, { month: null }] },
+                        { date: { $gte: startJS, $lte: endJS } }
+                    ]
+                }
+            ];
+        } else if (startJS && endJS) {
             advanceFilter.date = { $gte: startJS, $lte: endJS };
         }
         const advances = await Advance.find(advanceFilter).sort({ date: -1 });
