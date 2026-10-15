@@ -1175,3 +1175,4 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-10-15T16:37:38.079Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
 [2026-10-15T16:37:38.080Z] Password matched
 [2026-10-15T16:37:38.080Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-15T16:53:54.601Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
