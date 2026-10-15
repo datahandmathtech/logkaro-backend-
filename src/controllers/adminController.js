@@ -5107,7 +5107,7 @@ const getDriverSalarySummaryInternal = async (companyId, month, year, isFreelanc
         status: { $ne: 'deleted' }
     };
 
-    if (driverType) {
+    if (driverType && driverType !== 'All') {
         if (driverType === 'Taxi') {
             driverQuery.driverType = { $ne: 'Bus' };
         } else {
