@@ -6,6 +6,7 @@ const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
 const CashTransaction = require('../models/CashTransaction');
 const Company = require('../models/Company');
+const { syncInvoiceForBooking } = require('./invoiceController');
 const asyncHandler = require('express-async-handler');
 
 // @desc    Get all bookings for a company with filters
@@ -16,11 +17,15 @@ const getBookings = asyncHandler(async (req, res) => {
     let query = { company: req.params.companyId };
 
     if (status && status !== 'All') {
-        query.bookingStatus = status;
-        if (status === 'Completed' && !startDate && !endDate) {
-            const todayEnd = new Date();
-            todayEnd.setHours(23, 59, 59, 999);
-            query.travelStartDate = { $lte: todayEnd };
+        if (status === 'Completed') {
+            query.bookingStatus = { $in: ['Completed', 'Invoiced'] };
+            if (!startDate && !endDate) {
+                const todayEnd = new Date();
+                todayEnd.setHours(23, 59, 59, 999);
+                query.travelStartDate = { $lte: todayEnd };
+            }
+        } else {
+            query.bookingStatus = status;
         }
     }
 
@@ -44,7 +49,7 @@ const getBookings = asyncHandler(async (req, res) => {
         ];
     }
 
-    // Auto-complete past confirmed/ongoing bookings whose tour end date has already passed
+    // Auto-complete past confirmed/ongoing/scheduled/invoiced bookings whose tour end date has already passed
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -52,10 +57,11 @@ const getBookings = asyncHandler(async (req, res) => {
         await Booking.updateMany(
             {
                 company: req.params.companyId,
-                bookingStatus: { $in: ['Confirmed', 'Ongoing'] },
+                bookingStatus: { $in: ['Confirmed', 'Ongoing', 'Scheduled', 'Invoiced'] },
                 $or: [
                     { travelEndDate: { $lt: today } },
-                    { travelEndDate: null, travelStartDate: { $lt: today } }
+                    { travelEndDate: null, travelStartDate: { $lt: today } },
+                    { travelEndDate: { $exists: false }, travelStartDate: { $lt: today } }
                 ]
             },
             {
@@ -183,10 +189,38 @@ const updateBooking = asyncHandler(async (req, res) => {
         booking.vehicleMatrix = vehicleMatrix;
     }
 
-    // Recalculate balance
+    // Automatically sync Completed vs Confirmed status based on ride end date
+    if (booking.bookingStatus !== 'Cancelled') {
+        const effEnd = booking.travelEndDate || booking.travelStartDate;
+        if (effEnd) {
+            const endD = new Date(effEnd);
+            endD.setHours(0, 0, 0, 0);
+            const todayD = new Date();
+            todayD.setHours(0, 0, 0, 0);
+            if (endD < todayD) {
+                booking.bookingStatus = 'Completed';
+            } else if (booking.bookingStatus === 'Completed' && bookingStatus !== 'Completed') {
+                booking.bookingStatus = 'Confirmed';
+            }
+        }
+    }
+
+    // Recalculate balance & payment status
+    if (advancePaid !== undefined) {
+        booking.advancePaid = Number(advancePaid);
+    }
     booking.balanceDue = Math.max(0, booking.totalAmount - (booking.advancePaid || 0));
+    if (booking.totalAmount > 0 && booking.balanceDue <= 0) {
+        booking.paymentStatus = 'Full Received';
+    } else if ((booking.advancePaid || 0) > 0 && booking.balanceDue > 0) {
+        booking.paymentStatus = 'Partial';
+    }
 
     await booking.save();
+
+    if (booking.totalAmount > 0 && booking.balanceDue <= 0) {
+        await syncInvoiceForBooking(booking);
+    }
 
     // -------------------------------------------------------------------------
     // CASCADE SYNC 1: LIVE DRS (DRSDuty)
@@ -456,6 +490,10 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
 
     await booking.save();
 
+    if (booking.balanceDue <= 0) {
+        await syncInvoiceForBooking(booking);
+    }
+
     // Update Client balance
     if (booking.client) {
         const client = await Client.findById(booking.client);
@@ -677,7 +715,8 @@ const cancelBooking = asyncHandler(async (req, res) => {
             },
             {
                 $set: {
-                    status: 'Cancelled',
+                    status: 'Lost',
+                    priority: 'Lost',
                     notes: `Booking Cancelled: ${reason || 'Customer request'}`
                 }
             }

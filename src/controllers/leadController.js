@@ -29,31 +29,36 @@ const getLeads = asyncHandler(async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Auto-cancel past unconfirmed leads where tour date has already ended (exclude manually restored ones)
+    // Auto-move past unconfirmed leads (where tour date has ended) and cancelled leads to Lost
     try {
         await Lead.updateMany(
             {
                 company: req.params.companyId,
-                status: { $nin: ['Confirmed', 'Cancelled', 'Lost'] },
+                status: { $nin: ['Confirmed', 'Lost'] },
                 bookingId: null,
-                notes: { $not: /Restored from Lost/i },
+                notes: { $not: /Restored from Lost|Reopened to Active/i },
                 $or: [
+                    { status: 'Cancelled' },
                     { travelEndDate: { $lt: today } },
                     { travelEndDate: null, travelStartDate: { $lt: today } }
                 ]
             },
             {
-                $set: { status: 'Cancelled' },
-                $push: {
-                    remarksHistory: {
-                        text: 'Tour date passed without confirmation (Auto-cancelled)',
-                        date: new Date()
-                    }
-                }
+                $set: { status: 'Lost', priority: 'Lost' }
+            }
+        );
+        await Lead.updateMany(
+            {
+                company: req.params.companyId,
+                status: 'Cancelled',
+                priority: { $ne: 'Lost' }
+            },
+            {
+                $set: { status: 'Lost', priority: 'Lost' }
             }
         );
     } catch (e) {
-        console.error('Error auto-cancelling expired leads:', e);
+        console.error('Error auto-moving expired/cancelled leads to Lost:', e);
     }
 
     let query = { company: req.params.companyId };
@@ -91,7 +96,6 @@ const getLeads = asyncHandler(async (req, res) => {
             'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
         };
         const mStr = MONTH_MAP[month] || month;
-        const mNumStr = String(parseInt(mStr, 10));
 
         leads = leads.filter(lead => {
             const isMatchMonth = (rawDate) => {
@@ -108,42 +112,22 @@ const getLeads = asyncHandler(async (req, res) => {
                 return m === mStr;
             };
 
-            if (dateType === 'travel') {
-                // Filter strictly by Travel Tour Date
-                return isMatchMonth(lead.travelStartDate);
+            if (dateType === 'leadCreated') {
+                return isMatchMonth(lead.leadDate || lead.createdAt);
             }
 
-            // 1. Tour Travel Date: If tour travels in this month (e.g. advance bookings for Nov, Dec, Jan...)
-            if (isMatchMonth(lead.travelStartDate)) {
-                return true;
-            }
-
-            // 2. Client Code prefix: If enquiry arrived in this month (e.g. "10/01" -> Oct, "11/01" -> Nov, "09/01" -> Sep)
-            const code = String(lead.clientCode || lead.leadId || '').trim();
-            const codeMatch = code.match(/^(\d{1,2})\//);
-            if (codeMatch) {
-                const codeMonth = String(parseInt(codeMatch[1], 10)).padStart(2, '0');
-                if (codeMonth === mStr) return true;
-            }
-
-            // 3. Fallback for leads without MM/SS clientCode: use leadDate (Enquiry date)
-            if (lead.leadDate && isMatchMonth(lead.leadDate)) {
-                return true;
-            }
-
-            // 4. Fallback to createdAt
-            if (lead.createdAt && isMatchMonth(lead.createdAt)) {
-                return true;
-            }
-
-            return false;
+            // Strictly match the lead's Travel Month (fallback to leadDate/createdAt only if travelStartDate is missing)
+            const targetDate = lead.travelStartDate || lead.leadDate || lead.createdAt;
+            return isMatchMonth(targetDate);
         });
     }
 
     // Financial Year filter (e.g. 'FY 26-27', 'FY 27-28')
     if (fy && fy !== 'All FY') {
         leads = leads.filter(lead => {
-            const travelDate = lead.travelStartDate || lead.leadDate || lead.createdAt;
+            const travelDate = dateType === 'leadCreated'
+                ? (lead.leadDate || lead.createdAt)
+                : (lead.travelStartDate || lead.leadDate || lead.createdAt);
             if (!travelDate) return false;
             const d = new Date(travelDate);
             if (isNaN(d.getTime())) return false;
@@ -271,20 +255,30 @@ const createLead = asyncHandler(async (req, res) => {
         advanceDate: advanceDate || null,
         gstMode: gstMode || 'GST Inclusive',
         gstRate: Number(gstRate) || 5,
-        priority: priority || 'Unassigned',
-        status: (() => {
+        priority: (() => {
+            if (priority === 'Lost' || req.body.status === 'Lost' || req.body.status === 'Cancelled') return 'Lost';
             const now = new Date();
             now.setHours(0, 0, 0, 0);
             const end = travelEndDate ? new Date(travelEndDate) : (travelStartDate ? new Date(travelStartDate) : null);
             if (end) end.setHours(23, 59, 59, 999);
-            return (end && end < now) ? 'Cancelled' : 'New';
+            if (end && end < now) return 'Lost';
+            return priority || 'Unassigned';
+        })(),
+        status: (() => {
+            if (priority === 'Lost' || req.body.status === 'Lost' || req.body.status === 'Cancelled') return 'Lost';
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const end = travelEndDate ? new Date(travelEndDate) : (travelStartDate ? new Date(travelStartDate) : null);
+            if (end) end.setHours(23, 59, 59, 999);
+            return (end && end < now) ? 'Lost' : 'New';
         })(),
         remarksHistory: (() => {
+            if (priority === 'Lost' || req.body.status === 'Lost') return [];
             const now = new Date();
             now.setHours(0, 0, 0, 0);
             const end = travelEndDate ? new Date(travelEndDate) : (travelStartDate ? new Date(travelStartDate) : null);
             if (end) end.setHours(23, 59, 59, 999);
-            return (end && end < now) ? [{ text: 'Tour date passed without confirmation (Auto-cancelled)', date: new Date() }] : [];
+            return (end && end < now) ? [{ text: 'Tour date passed without confirmation (Auto-moved to Lost)', date: new Date() }] : [];
         })(),
         notes,
         specialRemarks: specialRemarks || '',
@@ -337,19 +331,12 @@ const updateLead = asyncHandler(async (req, res) => {
         req.body.totalAmount = Number(req.body.totalAmount) || 0;
     }
 
-    // Auto-reactivate unconfirmed lead if dates are updated to the future
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const startCandidate = req.body.travelStartDate ? new Date(req.body.travelStartDate) : (lead.travelStartDate ? new Date(lead.travelStartDate) : null);
-    const endCandidate = req.body.travelEndDate ? new Date(req.body.travelEndDate) : (lead.travelEndDate ? new Date(lead.travelEndDate) : startCandidate);
-
-    if (endCandidate) endCandidate.setHours(23, 59, 59, 999);
-
-    if (endCandidate && endCandidate >= now) {
-        // If lead was in Cancelled status and has no confirmed booking, restore to New / active
-        if (lead.status === 'Cancelled' && !lead.bookingId && !lead.bookingRef) {
-            req.body.status = req.body.status === 'Cancelled' ? 'New' : (req.body.status || 'New');
-            req.body.notes = req.body.notes ? `${req.body.notes} | Reactivated: tour date in future` : 'Reactivated to Open (Tour dates updated to future)';
+    if (req.body.priority === 'Lost' || req.body.status === 'Lost' || req.body.status === 'Cancelled') {
+        req.body.priority = 'Lost';
+        req.body.status = 'Lost';
+    } else if (req.body.priority && req.body.priority !== 'Lost' && (lead.status === 'Lost' || lead.status === 'Cancelled' || lead.priority === 'Lost')) {
+        if (!lead.bookingId && !lead.bookingRef) {
+            req.body.status = 'New';
         }
     }
 
@@ -607,7 +594,17 @@ const convertToBooking = asyncHandler(async (req, res) => {
         gstRate,
         taxableAmount,
         gstAmount,
-        bookingStatus: 'Confirmed',
+        bookingStatus: (() => {
+            const effEnd = lead.travelEndDate || lead.travelStartDate;
+            if (effEnd) {
+                const endD = new Date(effEnd);
+                endD.setHours(0, 0, 0, 0);
+                const todayD = new Date();
+                todayD.setHours(0, 0, 0, 0);
+                if (endD < todayD) return 'Completed';
+            }
+            return 'Confirmed';
+        })(),
         paymentStatus: advance >= grandTotal ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'No Advance'),
         vehicleMatrix: lead.vehicleMatrix || {},
         termsAndConditions: termsAndConditions || [

@@ -145,12 +145,12 @@ const leadSchema = new mongoose.Schema({
     },
     priority: {
         type: String,
-        enum: ['Hot', 'Warm', 'Cold', 'Unassigned'],
+        enum: ['Hot', 'Warm', 'Cold', 'Lost', 'Unassigned'],
         default: 'Unassigned'
     },
     status: {
         type: String,
-        enum: ['New', 'Follow-up', 'Quoted', 'Negotiation', 'Confirmed', 'Lost', 'Cancelled'],
+        enum: ['New', 'Follow-up', 'Quoted', 'Negotiation', 'Confirmed', 'Completed', 'Lost', 'Cancelled'],
         default: 'New'
     },
     bookingId: {

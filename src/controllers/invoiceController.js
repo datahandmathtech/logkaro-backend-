@@ -197,29 +197,181 @@ const createInvoice = asyncHandler(async (req, res) => {
         });
     }
 
-    // 8. Update linked Booking status if applicable
+    // 8. Update linked Booking without removing it from Completed Bookings
     if (bookingRef) {
-        await Booking.findByIdAndUpdate(bookingRef, {
-            bookingStatus: 'Invoiced',
-            notes: (await Booking.findById(bookingRef))?.notes 
-                ? `${(await Booking.findById(bookingRef)).notes} | Invoiced: ${invoiceNumber}` 
-                : `Invoiced: ${invoiceNumber}`
-        });
+        const existingBkg = await Booking.findById(bookingRef);
+        if (existingBkg) {
+            await Booking.findByIdAndUpdate(bookingRef, {
+                invoiceGenerated: true,
+                notes: existingBkg.notes
+                    ? (existingBkg.notes.includes(invoiceNumber) ? existingBkg.notes : `${existingBkg.notes} | Invoiced: ${invoiceNumber}`)
+                    : `Invoiced: ${invoiceNumber}`
+            });
+        }
     } else if (bookingId) {
-        await Booking.findOneAndUpdate({ bookingId }, {
-            bookingStatus: 'Invoiced'
-        });
+        await Booking.findOneAndUpdate(
+            { $or: [{ bookingId }, { clientCode: bookingId }] },
+            { invoiceGenerated: true }
+        );
     }
 
     res.status(201).json(invoice);
 });
 
+// Helper: Automatically create or update a Paid Tax Invoice when a booking's payment is settled (balanceDue <= 0)
+const syncInvoiceForBooking = async (booking) => {
+    try {
+        if (!booking || booking.bookingStatus === 'Cancelled') return null;
+        const pkgAmt = round2(Number(booking.totalAmount || booking.packagePrice) || 0);
+        if (pkgAmt <= 0) return null;
+
+        const advAmt = round2(Number(booking.advancePaid) || 0);
+        const balAmt = booking.balanceDue !== undefined
+            ? Math.max(0, round2(Number(booking.balanceDue)))
+            : Math.max(0, round2(pkgAmt - advAmt));
+
+        // Only auto-sync into Tax Invoices when payment is settled (balance is 0)
+        if (balAmt > 0 && booking.paymentStatus !== 'Full Received' && advAmt < pkgAmt) {
+            return null;
+        }
+
+        const displayCode = booking.clientCode || booking.bookingId || '';
+        const matchOr = [{ booking: booking._id }];
+        if (booking.bookingId) matchOr.push({ bookingId: booking.bookingId });
+        if (booking.clientCode) matchOr.push({ bookingId: booking.clientCode });
+
+        let existingInvoice = await Invoice.findOne({
+            company: booking.company,
+            $or: matchOr
+        });
+
+        const gstMode = booking.gstMode || 'GST Inclusive';
+        const rateNum = Number(booking.gstRate) || 5;
+        let taxableAmount = pkgAmt;
+        let totalTaxAmount = 0;
+        let totalAmount = pkgAmt;
+
+        if (gstMode === 'GST Extra') {
+            taxableAmount = pkgAmt;
+            totalTaxAmount = round2((taxableAmount * rateNum) / 100);
+            totalAmount = round2(taxableAmount + totalTaxAmount);
+        } else if (gstMode === 'GST Inclusive') {
+            totalAmount = pkgAmt;
+            taxableAmount = round2(totalAmount / (1 + (rateNum / 100)));
+            totalTaxAmount = round2(totalAmount - taxableAmount);
+        }
+
+        const cgstRate = totalTaxAmount > 0 ? round2(rateNum / 2) : 0;
+        const sgstRate = totalTaxAmount > 0 ? round2(rateNum / 2) : 0;
+        const cgstAmount = totalTaxAmount > 0 ? round2(totalTaxAmount / 2) : 0;
+        const sgstAmount = totalTaxAmount > 0 ? round2(totalTaxAmount - cgstAmount) : 0;
+
+        if (existingInvoice) {
+            existingInvoice.booking = booking._id;
+            if (displayCode) existingInvoice.bookingId = displayCode;
+            existingInvoice.totalAmount = totalAmount;
+            existingInvoice.taxableAmount = taxableAmount;
+            existingInvoice.totalTaxAmount = totalTaxAmount;
+            existingInvoice.cgstRate = cgstRate;
+            existingInvoice.cgstAmount = cgstAmount;
+            existingInvoice.sgstRate = sgstRate;
+            existingInvoice.sgstAmount = sgstAmount;
+            existingInvoice.advanceAdjusted = totalAmount;
+            existingInvoice.netPayable = 0;
+            existingInvoice.status = 'Paid';
+            if (booking.clientName) existingInvoice.billTo.name = booking.clientName;
+            if (booking.mobileNumber) existingInvoice.billTo.mobile = booking.mobileNumber;
+            await existingInvoice.save();
+            return existingInvoice;
+        }
+
+        const invoiceNumber = await getNextSequence('LK-INV');
+        const invDate = booking.travelEndDate || booking.travelStartDate || new Date();
+
+        const newInvoice = await Invoice.create({
+            invoiceNumber,
+            company: booking.company,
+            booking: booking._id,
+            bookingId: displayCode,
+            client: booking.client || null,
+            billTo: {
+                name: booking.clientName || 'Valued Guest',
+                companyName: '',
+                mobile: booking.mobileNumber || 'N/A',
+                email: booking.email || '',
+                address: booking.pickupLocation || 'Rajasthan',
+                gstin: booking.gstin || '',
+                placeOfSupply: 'Rajasthan',
+                stateCode: '08'
+            },
+            invoiceDate: new Date(invDate),
+            dueDate: new Date(invDate),
+            salesLedger: 'Taxi Sales',
+            items: [
+                {
+                    description: `${booking.vehicleType || 'Commercial Vehicle'} Rental & Travel Service (${displayCode})`,
+                    sacCode: '996601',
+                    quantity: 1,
+                    rate: pkgAmt,
+                    amount: pkgAmt
+                }
+            ],
+            sacCode: '996601',
+            taxableAmount,
+            gstMode,
+            gstRate: rateNum,
+            isInterState: false,
+            cgstRate,
+            cgstAmount,
+            sgstRate,
+            sgstAmount,
+            igstRate: 0,
+            igstAmount: 0,
+            totalTaxAmount,
+            totalAmount,
+            advanceAdjusted: totalAmount,
+            netPayable: 0,
+            status: 'Paid',
+            notes: `Auto-generated Tax Invoice on full payment settlement for booking ${displayCode}`
+        });
+
+        await Booking.findByIdAndUpdate(booking._id, {
+            invoiceGenerated: true
+        });
+
+        return newInvoice;
+    } catch (err) {
+        console.error('Error syncing invoice for paid booking:', err);
+        return null;
+    }
+};
+
 // @desc    Get all invoices for a company
 // @route   GET /api/invoices/:companyId
 // @access  Private/AdminOrExecutive
 const getInvoices = asyncHandler(async (req, res) => {
-    const { status, search, startDate, endDate, page = 1, limit = 50 } = req.query;
+    const { status, search, startDate, endDate, page = 1, limit = 500 } = req.query;
     const companyId = req.params.companyId || req.user?.company;
+
+    // Auto-sync any fully paid (balanceDue <= 0) bookings for this company into Tax Invoices
+    try {
+        const paidBookings = await Booking.find({
+            company: companyId,
+            bookingStatus: { $ne: 'Cancelled' },
+            totalAmount: { $gt: 0 },
+            $or: [
+                { balanceDue: { $lte: 0 } },
+                { paymentStatus: 'Full Received' },
+                { $expr: { $gte: ['$advancePaid', '$totalAmount'] } }
+            ]
+        });
+
+        for (const bkg of paidBookings) {
+            await syncInvoiceForBooking(bkg);
+        }
+    } catch (syncErr) {
+        console.error('Error auto-syncing paid bookings into invoices:', syncErr);
+    }
 
     const query = { company: companyId };
 
@@ -249,10 +401,10 @@ const getInvoices = asyncHandler(async (req, res) => {
     }
 
     const invoices = await Invoice.find(query)
-        .populate('booking', 'bookingId travelStartDate travelEndDate vehicleType clientName')
+        .populate('booking', 'bookingId clientCode travelStartDate travelEndDate vehicleType clientName mobileNumber totalAmount advancePaid balanceDue gstMode gstRate')
         .populate('client', 'name mobile balance')
         .populate('company', 'name gstNumber logoUrl ownerName whatsappNumber')
-        .sort({ createdAt: -1 })
+        .sort({ invoiceDate: -1, createdAt: -1 })
         .limit(Number(limit))
         .skip((Number(page) - 1) * Number(limit));
 
@@ -416,5 +568,6 @@ module.exports = {
     getInvoices,
     getInvoiceById,
     updateInvoiceStatus,
-    deleteInvoice
+    deleteInvoice,
+    syncInvoiceForBooking
 };
