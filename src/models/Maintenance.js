@@ -36,7 +36,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     paymentMode: {
         type: String,
-        enum: ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Other'],
+        enum: ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'],
         default: 'Cash'
     },
     paymentStatus: {

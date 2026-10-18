@@ -2115,10 +2115,22 @@ const approveNewTrip = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/border-tax
 // @access  Private/Admin
 const addBorderTax = asyncHandler(async (req, res) => {
-    const { 
-        vehicleId, driverId, borderName, amount, date, validTill, remarks, companyId,
-        paidBy, paymentSource, bankAccountId, paymentMode, bookingId, bookingRef, guestName
-    } = req.body;
+    const norm = (v) => Array.isArray(v) ? v[0] : v;
+    let vehicleId = norm(req.body.vehicleId);
+    let driverId = norm(req.body.driverId);
+    let borderName = norm(req.body.borderName);
+    let amount = norm(req.body.amount);
+    let date = norm(req.body.date);
+    let validTill = norm(req.body.validTill);
+    let remarks = norm(req.body.remarks);
+    let companyId = norm(req.body.companyId) || req.headers.companyid || req.tenantFilter?.company || req.user?.company?._id || req.user?.company;
+    let paidBy = norm(req.body.paidBy);
+    let paymentSource = norm(req.body.paymentSource);
+    let bankAccountId = norm(req.body.bankAccountId);
+    let paymentMode = norm(req.body.paymentMode);
+    let bookingId = norm(req.body.bookingId);
+    let bookingRef = norm(req.body.bookingRef);
+    let guestName = norm(req.body.guestName);
 
     if (!vehicleId || !borderName || !amount || !date || !companyId) {
         return res.status(400).json({ message: 'Please provide all required fields' });
@@ -2127,11 +2139,12 @@ const addBorderTax = asyncHandler(async (req, res) => {
     const receiptPhoto = req.file ? req.file.path.replace(/\\/g, '/') : null;
     const numAmount = Number(amount);
     const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
+    const cleanDriverId = (driverId && typeof driverId === 'string' && driverId.trim() !== '' && driverId !== 'undefined' && driverId !== 'null' && mongoose.Types.ObjectId.isValid(driverId.trim())) ? driverId.trim() : null;
 
     const entry = await BorderTax.create({
         company: companyId,
         vehicle: vehicleId,
-        ...(driverId && driverId.trim() !== '' ? { driver: driverId } : {}),
+        ...(cleanDriverId ? { driver: cleanDriverId } : {}),
         borderName,
         amount: numAmount,
         date,
@@ -3160,58 +3173,67 @@ const deleteBorderTax = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/maintenance
 // @access  Private/Admin
 const addMaintenanceRecord = asyncHandler(async (req, res) => {
-    let {
-        vehicleId,
-        companyId,
-        maintenanceType,
-        category,
-        partsChanged,
-        description,
-        garageName,
-        billNumber,
-        billDate,
-        amount,
-        paymentMode,
-        paymentStatus,
-        paymentSource,
-        currentKm,
-        nextServiceKm,
-        nextServiceDate,
-        status,
-        driverId,
-        paidBy,
-        bankAccountId,
-        bookingId,
-        bookingRef,
-        guestName
-    } = req.body;
+    const norm = (v) => Array.isArray(v) ? v[0] : v;
+    let vehicleId = norm(req.body.vehicleId);
+    let companyId = norm(req.body.companyId) || req.headers.companyid || req.tenantFilter?.company || req.user?.company?._id || req.user?.company;
+    let maintenanceType = norm(req.body.maintenanceType) || 'Driver Services';
+    let category = norm(req.body.category);
+    let partsChanged = req.body.partsChanged;
+    let description = norm(req.body.description);
+    let remarks = norm(req.body.remarks);
+    let garageName = norm(req.body.garageName);
+    let billNumber = norm(req.body.billNumber);
+    let billDate = norm(req.body.billDate) || norm(req.body.date) || new Date();
+    let amount = norm(req.body.amount);
+    let paymentMode = norm(req.body.paymentMode);
+    let paymentStatus = norm(req.body.paymentStatus) || 'Paid';
+    let paymentSource = norm(req.body.paymentSource);
+    let currentKm = norm(req.body.currentKm);
+    let nextServiceKm = norm(req.body.nextServiceKm);
+    let nextServiceDate = norm(req.body.nextServiceDate);
+    let status = norm(req.body.status) || 'Completed';
+    let driverId = norm(req.body.driverId);
+    let paidBy = norm(req.body.paidBy);
+    let bankAccountId = norm(req.body.bankAccountId);
+    let bookingId = norm(req.body.bookingId);
+    let bookingRef = norm(req.body.bookingRef);
+    let guestName = norm(req.body.guestName);
 
-    // Normalize array values (FormData can send duplicate keys as arrays)
-    if (Array.isArray(vehicleId)) vehicleId = vehicleId[0];
-    if (Array.isArray(companyId)) companyId = companyId[0];
-
-    const numAmount = Number(amount);
+    const numAmount = Number(amount) || 0;
     const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
+    const validPaymentModes = ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'];
+    const safePaymentMode = validPaymentModes.includes(paymentMode) ? paymentMode : 'Cash';
+    const cleanDriverId = (driverId && typeof driverId === 'string' && driverId.trim() !== '' && driverId !== 'undefined' && driverId !== 'null' && mongoose.Types.ObjectId.isValid(driverId.trim())) ? driverId.trim() : null;
+
+    let parsedPartsChanged = [];
+    if (partsChanged) {
+        try {
+            const p = Array.isArray(partsChanged) ? partsChanged[0] : partsChanged;
+            parsedPartsChanged = typeof p === 'string' ? JSON.parse(p) : (Array.isArray(p) ? p : []);
+        } catch (e) {
+            parsedPartsChanged = [];
+        }
+    }
 
     const maintenanceData = {
         vehicle: vehicleId,
         company: companyId,
-        driver: driverId || null,
+        driver: cleanDriverId,
         maintenanceType,
         category,
-        partsChanged: partsChanged ? (typeof partsChanged === 'string' ? JSON.parse(partsChanged) : partsChanged) : [],
-        description: description || req.body.remarks || '',
+        partsChanged: parsedPartsChanged,
+        description: description || remarks || '',
         garageName,
         billNumber,
         billDate,
         amount: numAmount,
-        paymentMode,
-        paymentStatus,
+        paymentMode: safePaymentMode,
+        paymentStatus: ['Paid', 'Due'].includes(paymentStatus) ? paymentStatus : 'Paid',
         paymentSource: effectivePaidBy === 'Guest' ? 'Guest' : 'Office',
-        currentKm,
-        nextServiceKm,
-        nextServiceDate,
-        status,
+        ...(currentKm ? { currentKm: Number(currentKm) } : {}),
+        ...(nextServiceKm ? { nextServiceKm: Number(nextServiceKm) } : {}),
+        ...(nextServiceDate ? { nextServiceDate } : {}),
+        status: ['Completed', 'Pending', 'Scheduled'].includes(status) ? status : 'Completed',
         createdBy: req.user._id
     };
 
@@ -3510,46 +3532,53 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
         throw new Error('Record not found in any collection');
     }
 
-    let {
-        vehicleId,
-        maintenanceType,
-        category,
-        partsChanged,
-        description,
-        garageName,
-        billNumber,
-        billDate,
-        amount,
-        paymentMode,
-        paymentStatus,
-        paymentSource,
-        currentKm,
-        nextServiceKm,
-        status,
-        driverId
-    } = req.body;
+    const norm = (v) => Array.isArray(v) ? v[0] : v;
+    let vehicleId = norm(req.body.vehicleId);
+    let maintenanceType = norm(req.body.maintenanceType);
+    let category = norm(req.body.category);
+    let partsChanged = req.body.partsChanged;
+    let description = norm(req.body.description);
+    let remarks = norm(req.body.remarks);
+    let garageName = norm(req.body.garageName);
+    let billNumber = norm(req.body.billNumber);
+    let billDate = norm(req.body.billDate) || norm(req.body.date);
+    let amount = norm(req.body.amount);
+    let paymentMode = norm(req.body.paymentMode);
+    let paymentStatus = norm(req.body.paymentStatus);
+    let paymentSource = norm(req.body.paymentSource);
+    let currentKm = norm(req.body.currentKm);
+    let nextServiceKm = norm(req.body.nextServiceKm);
+    let status = norm(req.body.status);
+    let driverId = norm(req.body.driverId);
+    let bankAccountId = norm(req.body.bankAccountId);
 
-    // Normalize array values (FormData can send duplicate keys as arrays)
-    if (Array.isArray(vehicleId)) vehicleId = vehicleId[0];
-    if (Array.isArray(billDate)) billDate = billDate[0];
+    const validPaymentModes = ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'];
 
     if (docType === 'maintenance') {
         if (vehicleId) targetDoc.vehicle = vehicleId;
-        if (driverId !== undefined) targetDoc.driver = driverId || null;
+        if (driverId !== undefined) {
+            const cleanDriverId = (driverId && typeof driverId === 'string' && driverId.trim() !== '' && driverId !== 'undefined' && driverId !== 'null' && mongoose.Types.ObjectId.isValid(driverId.trim())) ? driverId.trim() : null;
+            targetDoc.driver = cleanDriverId;
+        }
         if (maintenanceType) targetDoc.maintenanceType = maintenanceType;
         if (category) targetDoc.category = category;
-        if (partsChanged) targetDoc.partsChanged = (typeof partsChanged === 'string' ? JSON.parse(partsChanged) : partsChanged);
-        if (description || req.body.remarks !== undefined) targetDoc.description = description || req.body.remarks || '';
+        if (partsChanged) {
+            try {
+                const p = Array.isArray(partsChanged) ? partsChanged[0] : partsChanged;
+                targetDoc.partsChanged = typeof p === 'string' ? JSON.parse(p) : (Array.isArray(p) ? p : []);
+            } catch (e) {}
+        }
+        if (description || remarks !== undefined) targetDoc.description = description || remarks || '';
         if (garageName) targetDoc.garageName = garageName;
         if (billNumber) targetDoc.billNumber = billNumber;
         if (billDate) targetDoc.billDate = billDate;
         if (amount) targetDoc.amount = Number(amount);
-        if (paymentMode) targetDoc.paymentMode = paymentMode;
-        if (paymentStatus) targetDoc.paymentStatus = paymentStatus;
+        if (paymentMode && validPaymentModes.includes(paymentMode)) targetDoc.paymentMode = paymentMode;
+        if (paymentStatus && ['Paid', 'Due'].includes(paymentStatus)) targetDoc.paymentStatus = paymentStatus;
         if (paymentSource) targetDoc.paymentSource = paymentSource;
         if (currentKm) targetDoc.currentKm = Number(currentKm);
         if (nextServiceKm) targetDoc.nextServiceKm = Number(nextServiceKm);
-        if (status) targetDoc.status = status;
+        if (status && ['Completed', 'Pending', 'Scheduled'].includes(status)) targetDoc.status = status;
         if (req.file) targetDoc.billPhoto = req.file.path;
 
         const updated = await targetDoc.save();
@@ -3562,7 +3591,7 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
             amount: updated.amount,
             date: updated.billDate,
             paymentMode: updated.paymentMode,
-            bankAccountId: req.body.bankAccountId || null,
+            bankAccountId: bankAccountId || null,
             type: 'OUT',
             category: 'Vehicle Maintenance',
             description: `Maintenance (${updated.category || updated.maintenanceType}) for Vehicle ${veh?.carNumber || ''}`,
