@@ -110,6 +110,17 @@ const leadSchema = new mongoose.Schema({
         type: Date,
         required: true
     },
+    isBreakTour: {
+        type: Boolean,
+        default: false
+    },
+    excludedDates: [{
+        type: String
+    }],
+    activeDaysCount: {
+        type: Number,
+        default: 0
+    },
     carType: {
         type: String,
         required: true

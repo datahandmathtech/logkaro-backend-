@@ -193,6 +193,7 @@ const createLead = asyncHandler(async (req, res) => {
     const {
         company, clientName, mobileNumber, alternateMobile, email, gstin,
         source, reference, salesPerson, leadDate, travelStartDate, travelEndDate,
+        isBreakTour, excludedDates, activeDaysCount,
         carType, numberOfCars, itinerary, extraCharges, totalAmount, advanceDate, gstMode, gstRate, notes,
         specialRemarks, inclusions, bookingReference, travelAgent, travelAgentName, travelAgentMobile, priority
     } = req.body;
@@ -247,6 +248,9 @@ const createLead = asyncHandler(async (req, res) => {
         leadDate: leadDate || Date.now(),
         travelStartDate,
         travelEndDate,
+        isBreakTour: Boolean(isBreakTour) || (Array.isArray(excludedDates) && excludedDates.length > 0),
+        excludedDates: Array.isArray(excludedDates) ? excludedDates : [],
+        activeDaysCount: Number(activeDaysCount) || 0,
         carType,
         numberOfCars: Number(numberOfCars) || 1,
         itinerary: formattedItinerary,
@@ -582,6 +586,9 @@ const convertToBooking = asyncHandler(async (req, res) => {
         bookingDate: new Date(),
         travelStartDate: lead.travelStartDate,
         travelEndDate: lead.travelEndDate,
+        isBreakTour: lead.isBreakTour || (Array.isArray(lead.excludedDates) && lead.excludedDates.length > 0),
+        excludedDates: lead.excludedDates || [],
+        activeDaysCount: lead.activeDaysCount || 0,
         vehicleType: lead.carType,
         numberOfCars: lead.numberOfCars,
         itinerary: lead.itinerary || [],

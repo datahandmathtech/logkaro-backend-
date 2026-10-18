@@ -125,6 +125,7 @@ const updateBooking = asyncHandler(async (req, res) => {
     const { 
         bookingStatus, paymentStatus, notes, termsAndConditions,
         vehicleType, numberOfCars, totalAmount, travelStartDate, travelEndDate,
+        isBreakTour, excludedDates, activeDaysCount,
         pickupLocation, dropLocation, pickupPoint, dropPoint, itinerary, adminOverride, advancePaid,
         clientName, mobileNumber, alternateMobile, email, gstin,
         source, salesPerson, bookingReference, travelAgent, travelAgentName, travelAgentMobile,
@@ -147,6 +148,9 @@ const updateBooking = asyncHandler(async (req, res) => {
     if (totalAmount !== undefined) booking.totalAmount = Number(totalAmount);
     if (travelStartDate) booking.travelStartDate = new Date(travelStartDate);
     if (travelEndDate) booking.travelEndDate = new Date(travelEndDate);
+    if (isBreakTour !== undefined) booking.isBreakTour = Boolean(isBreakTour);
+    if (excludedDates !== undefined) booking.excludedDates = Array.isArray(excludedDates) ? excludedDates : [];
+    if (activeDaysCount !== undefined) booking.activeDaysCount = Number(activeDaysCount) || 0;
     if (pickupLocation !== undefined) booking.pickupLocation = pickupLocation;
     if (dropLocation !== undefined) booking.dropLocation = dropLocation;
     if (pickupPoint !== undefined) booking.pickupPoint = pickupPoint;
@@ -418,6 +422,9 @@ const updateBooking = asyncHandler(async (req, res) => {
                     carType: booking.vehicleType || '',
                     travelStartDate: booking.travelStartDate,
                     travelEndDate: booking.travelEndDate,
+                    isBreakTour: booking.isBreakTour || false,
+                    excludedDates: booking.excludedDates || [],
+                    activeDaysCount: booking.activeDaysCount || 0,
                     totalAmount: booking.totalAmount,
                     pickupPoint: booking.pickupPoint || booking.pickupLocation || '',
                     dropPoint: booking.dropPoint || booking.dropLocation || ''
