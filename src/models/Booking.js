@@ -159,6 +159,14 @@ const bookingSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    guestFuelFilled: {
+        type: Boolean,
+        default: false
+    },
+    guestFuelAmount: {
+        type: Number,
+        default: 0
+    },
     balanceDue: {
         type: Number,
         default: 0

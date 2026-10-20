@@ -127,6 +127,7 @@ const updateBooking = asyncHandler(async (req, res) => {
         vehicleType, numberOfCars, totalAmount, travelStartDate, travelEndDate,
         isBreakTour, excludedDates, activeDaysCount,
         pickupLocation, dropLocation, pickupPoint, dropPoint, itinerary, adminOverride, advancePaid,
+        guestFuelFilled, guestFuelAmount,
         clientName, mobileNumber, alternateMobile, email, gstin,
         source, salesPerson, bookingReference, travelAgent, travelAgentName, travelAgentMobile,
         vehicleMatrix, gstMode, gstRate, specialRemarks
@@ -209,14 +210,21 @@ const updateBooking = asyncHandler(async (req, res) => {
         }
     }
 
-    // Recalculate balance & payment status
+    // Recalculate balance & payment status (including Guest Fuel Deduction)
     if (advancePaid !== undefined) {
         booking.advancePaid = Number(advancePaid);
     }
-    booking.balanceDue = Math.max(0, booking.totalAmount - (booking.advancePaid || 0));
+    if (guestFuelFilled !== undefined) {
+        booking.guestFuelFilled = Boolean(guestFuelFilled);
+    }
+    if (guestFuelAmount !== undefined) {
+        booking.guestFuelAmount = Number(guestFuelAmount) || 0;
+    }
+    const fuelDeduction = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
+    booking.balanceDue = Math.max(0, booking.totalAmount - (booking.advancePaid || 0) - fuelDeduction);
     if (booking.totalAmount > 0 && booking.balanceDue <= 0) {
         booking.paymentStatus = 'Full Received';
-    } else if ((booking.advancePaid || 0) > 0 && booking.balanceDue > 0) {
+    } else if (((booking.advancePaid || 0) + fuelDeduction) > 0 && booking.balanceDue > 0) {
         booking.paymentStatus = 'Partial';
     }
 
@@ -254,7 +262,10 @@ const updateBooking = asyncHandler(async (req, res) => {
                     clientName: booking.clientName,
                     mobileNumber: booking.mobileNumber,
                     carType: booking.vehicleType || 'Sedan',
-                    paymentStatus: effectivePaymentStatus
+                    paymentStatus: effectivePaymentStatus,
+                    advancePaid: booking.advancePaid || 0,
+                    guestFuelFilled: Boolean(booking.guestFuelFilled),
+                    guestFuelAmount: Number(booking.guestFuelAmount) || 0
                 }
             });
 

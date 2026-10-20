@@ -73,7 +73,7 @@ const getDRSDuties = asyncHandler(async (req, res) => {
         .populate('driver', 'name mobile')
         .populate('vehicle', 'carNumber model type brand')
         .populate('leadId', 'clientName leadId status totalAmount')
-        .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid balanceDue bookingStatus paymentStatus travelStartDate travelEndDate itinerary vehicleType client')
+        .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid guestFuelFilled guestFuelAmount balanceDue bookingStatus paymentStatus travelStartDate travelEndDate itinerary vehicleType client')
         .sort({ date: 1, time: 1 });
         
     res.json(duties);
@@ -282,6 +282,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
             dayNo: i + 1,
             pickupPoint: pickupPoint || hotel || '',
             revenue: i === 0 ? totalRev : 0,
+            advancePaid: advance,
             km: km || '',
             cOut: cOut || '',
             paymentStatus: (advance >= totalRev && totalRev > 0) ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'Pending'),
@@ -307,7 +308,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
         .populate('driver', 'name mobile')
         .populate('vehicle', 'carNumber model type brand')
         .populate('leadId', 'clientName leadId status')
-        .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid balanceDue bookingStatus travelStartDate travelEndDate itinerary vehicleType');
+        .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid guestFuelFilled guestFuelAmount balanceDue bookingStatus travelStartDate travelEndDate itinerary vehicleType');
 
     res.status(201).json({
         duty: populated,
@@ -357,7 +358,7 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     .populate('driver', 'name mobile phone')
     .populate('vehicle', 'carNumber model type brand')
     .populate('leadId', 'clientName leadId status')
-    .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid balanceDue bookingStatus');
+    .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid guestFuelFilled guestFuelAmount balanceDue bookingStatus');
 
     const clientNameChanged = updatedDuty.clientName && updatedDuty.clientName !== oldClientName;
     const mobileChanged = updatedDuty.mobileNumber && updatedDuty.mobileNumber !== oldMobile;
@@ -367,7 +368,7 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     // CASCADE SYNC 1: SIBLING DRS DUTIES (Same booking/client)
     // -------------------------------------------------------------
     try {
-        if (clientNameChanged || mobileChanged) {
+        if (clientNameChanged || mobileChanged || req.body.guestFuelFilled !== undefined || req.body.guestFuelAmount !== undefined || req.body.advancePaid !== undefined) {
             if (bkgRefId || updatedDuty.bookingId) {
                 const sibOr = [];
                 if (bkgRefId) sibOr.push({ bookingRef: bkgRefId });
@@ -381,7 +382,10 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                         {
                             $set: {
                                 ...(clientNameChanged && { clientName: updatedDuty.clientName }),
-                                ...(mobileChanged && { mobileNumber: updatedDuty.mobileNumber })
+                                ...(mobileChanged && { mobileNumber: updatedDuty.mobileNumber }),
+                                ...(req.body.guestFuelFilled !== undefined && { guestFuelFilled: Boolean(req.body.guestFuelFilled) }),
+                                ...(req.body.guestFuelAmount !== undefined && { guestFuelAmount: Number(req.body.guestFuelAmount) || 0 }),
+                                ...(req.body.advancePaid !== undefined && { advancePaid: Number(req.body.advancePaid) || 0 })
                             }
                         }
                     );
@@ -413,6 +417,22 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                 }
                 if (updatedDuty.carType) {
                     bkg.vehicleType = updatedDuty.carType;
+                }
+                if (req.body.advancePaid !== undefined) {
+                    bkg.advancePaid = Number(req.body.advancePaid) || 0;
+                }
+                if (req.body.guestFuelFilled !== undefined) {
+                    bkg.guestFuelFilled = Boolean(req.body.guestFuelFilled);
+                }
+                if (req.body.guestFuelAmount !== undefined) {
+                    bkg.guestFuelAmount = Number(req.body.guestFuelAmount) || 0;
+                }
+                const fuelDed = bkg.guestFuelFilled ? (Number(bkg.guestFuelAmount) || 0) : 0;
+                bkg.balanceDue = Math.max(0, (Number(bkg.totalAmount) || 0) - (Number(bkg.advancePaid) || 0) - fuelDed);
+                if (bkg.totalAmount > 0 && bkg.balanceDue <= 0) {
+                    bkg.paymentStatus = 'Full Received';
+                } else if (((bkg.advancePaid || 0) + fuelDed) > 0 && bkg.balanceDue > 0) {
+                    bkg.paymentStatus = 'Partial';
                 }
 
                 const dutyDate = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';

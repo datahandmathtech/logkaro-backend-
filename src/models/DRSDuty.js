@@ -86,6 +86,18 @@ const drsDutySchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    advancePaid: {
+        type: Number,
+        default: 0
+    },
+    guestFuelFilled: {
+        type: Boolean,
+        default: false
+    },
+    guestFuelAmount: {
+        type: Number,
+        default: 0
+    },
     cOut: {
         type: String,
         default: ''
