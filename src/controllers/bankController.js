@@ -1,6 +1,9 @@
 const asyncHandler = require('express-async-handler');
 const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
+const Booking = require('../models/Booking');
+const Client = require('../models/Client');
+const LedgerEntry = require('../models/LedgerEntry');
 
 // @desc    Get all bank accounts for a company
 // @route   GET /api/banks/company/:companyId
@@ -120,6 +123,7 @@ const getBankTransactions = asyncHandler(async (req, res) => {
     const transactions = await BankTransaction.find(query)
         .populate('bankAccount', 'bankName accountNumber')
         .populate('bookingRef', 'bookingId clientCode clientName')
+        .populate('clientRef', 'name mobile')
         .populate('createdBy', 'name')
         .sort({ date: -1, createdAt: -1 });
 
@@ -154,7 +158,7 @@ const getBankTransactions = asyncHandler(async (req, res) => {
 // @route   POST /api/banks/transactions
 // @access  Private
 const addBankTransaction = asyncHandler(async (req, res) => {
-    const { company, bankAccountId, type, amount, category, paymentMode, reference, paymentScreenshot, description, date } = req.body;
+    const { company, bankAccountId, type, amount, category, paymentMode, reference, paymentScreenshot, description, date, bookingRef, clientId } = req.body;
     
     if (!company || !bankAccountId || !type || !amount) {
         res.status(400);
@@ -168,6 +172,18 @@ const addBankTransaction = asyncHandler(async (req, res) => {
     }
 
     const numAmount = Number(amount);
+    const txDate = date ? new Date(date) : new Date();
+
+    let resolvedBooking = null;
+    let resolvedClientId = clientId || null;
+
+    if (bookingRef) {
+        resolvedBooking = await Booking.findById(bookingRef);
+        if (resolvedBooking && !resolvedClientId && resolvedBooking.client) {
+            resolvedClientId = resolvedBooking.client;
+        }
+    }
+
     const tx = await BankTransaction.create({
         company,
         bankAccount: bank._id,
@@ -178,8 +194,10 @@ const addBankTransaction = asyncHandler(async (req, res) => {
         paymentMode: paymentMode || 'UPI / QR Code',
         reference: reference || '',
         paymentScreenshot: paymentScreenshot || '',
-        description: description || '',
-        date: date ? new Date(date) : new Date(),
+        description: description || (resolvedBooking ? `Mr. ${String(resolvedBooking.clientName || '').replace(/^Mr\.?\s*/i, '')}` : ''),
+        bookingRef: resolvedBooking ? resolvedBooking._id : null,
+        clientRef: resolvedClientId || null,
+        date: txDate,
         createdBy: req.user ? req.user._id : null
     });
 
@@ -190,6 +208,37 @@ const addBankTransaction = asyncHandler(async (req, res) => {
         bank.currentBalance -= numAmount;
     }
     await bank.save();
+
+    // Sync to Booking & Client Ledger if guest/client was selected on an IN transaction
+    if (type === 'IN' && (resolvedBooking || resolvedClientId)) {
+        try {
+            if (resolvedBooking) {
+                resolvedBooking.advancePaid = (Number(resolvedBooking.advancePaid) || 0) + numAmount;
+                resolvedBooking.balanceDue = Math.max(0, (Number(resolvedBooking.totalAmount) || 0) - resolvedBooking.advancePaid);
+                resolvedBooking.paymentStatus = resolvedBooking.balanceDue <= 0 ? 'Full Received' : 'Partial';
+                await resolvedBooking.save();
+            }
+            if (resolvedClientId) {
+                const clientDoc = await Client.findById(resolvedClientId);
+                if (clientDoc) {
+                    clientDoc.totalPaid = (Number(clientDoc.totalPaid) || 0) + numAmount;
+                    clientDoc.balance = Math.max(0, (Number(clientDoc.balance) || 0) - numAmount);
+                    await clientDoc.save();
+                }
+                await LedgerEntry.create({
+                    client: resolvedClientId,
+                    company,
+                    type: category === 'Advance Payment' ? 'Advance' : 'Payment',
+                    amount: numAmount,
+                    date: txDate,
+                    description: `Payment received${resolvedBooking ? ` for ${resolvedBooking.bookingId}` : ''} via ${paymentMode || 'UPI / QR Code'} (${bank.bankName})${reference ? ` (Ref: ${reference})` : ''}`,
+                    referenceId: resolvedBooking ? resolvedBooking._id : tx._id
+                });
+            }
+        } catch (syncErr) {
+            console.error('Error syncing direct bank entry to booking/client ledger:', syncErr);
+        }
+    }
 
     res.status(201).json({ transaction: tx, bankBalance: bank.currentBalance });
 });

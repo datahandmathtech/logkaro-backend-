@@ -3,6 +3,9 @@ const CashTransaction = require('../models/CashTransaction');
 const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
 const Company = require('../models/Company');
+const Booking = require('../models/Booking');
+const Client = require('../models/Client');
+const LedgerEntry = require('../models/LedgerEntry');
 const { DateTime } = require('luxon');
 
 // @desc    Get all cash transactions with stats
@@ -91,7 +94,7 @@ const getCashTransactions = asyncHandler(async (req, res) => {
 const addCashTransaction = asyncHandler(async (req, res) => {
     const { 
         company, type, amount, category, description, reference, 
-        receiptPhoto, date, bookingRef, guestName, driverRef, driverName 
+        receiptPhoto, date, bookingRef, clientId, guestName, driverRef, driverName 
     } = req.body;
 
     if (!company || !type || !amount) {
@@ -107,17 +110,28 @@ const addCashTransaction = asyncHandler(async (req, res) => {
 
     const txDate = date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : new Date();
 
+    let resolvedBooking = null;
+    let resolvedClientId = clientId || null;
+
+    if (bookingRef) {
+        resolvedBooking = await Booking.findById(bookingRef);
+        if (resolvedBooking && !resolvedClientId && resolvedBooking.client) {
+            resolvedClientId = resolvedBooking.client;
+        }
+    }
+
     const tx = await CashTransaction.create({
         company,
         type,
         amount: numAmount,
         category: category || (type === 'IN' ? 'General Cash IN' : 'General Cash OUT'),
-        description: description || '',
+        description: description || (resolvedBooking ? `Mr. ${String(resolvedBooking.clientName || '').replace(/^Mr\.?\s*/i, '')}` : ''),
         reference: reference || '',
         receiptPhoto: receiptPhoto || '',
         date: txDate,
-        bookingRef: bookingRef || null,
-        guestName: guestName || '',
+        bookingRef: resolvedBooking ? resolvedBooking._id : null,
+        clientRef: resolvedClientId || null,
+        guestName: guestName || (resolvedBooking ? resolvedBooking.clientName : ''),
         driverRef: driverRef || null,
         driverName: driverName || '',
         createdBy: req.user._id
@@ -128,6 +142,37 @@ const addCashTransaction = asyncHandler(async (req, res) => {
     if (comp) {
         comp.cashBalance = (comp.cashBalance || 0) + (type === 'IN' ? numAmount : -numAmount);
         await comp.save();
+    }
+
+    // Sync to Booking & Client Ledger if guest/client was selected on an IN transaction
+    if (type === 'IN' && (resolvedBooking || resolvedClientId)) {
+        try {
+            if (resolvedBooking) {
+                resolvedBooking.advancePaid = (Number(resolvedBooking.advancePaid) || 0) + numAmount;
+                resolvedBooking.balanceDue = Math.max(0, (Number(resolvedBooking.totalAmount) || 0) - resolvedBooking.advancePaid);
+                resolvedBooking.paymentStatus = resolvedBooking.balanceDue <= 0 ? 'Full Received' : 'Partial';
+                await resolvedBooking.save();
+            }
+            if (resolvedClientId) {
+                const clientDoc = await Client.findById(resolvedClientId);
+                if (clientDoc) {
+                    clientDoc.totalPaid = (Number(clientDoc.totalPaid) || 0) + numAmount;
+                    clientDoc.balance = Math.max(0, (Number(clientDoc.balance) || 0) - numAmount);
+                    await clientDoc.save();
+                }
+                await LedgerEntry.create({
+                    client: resolvedClientId,
+                    company,
+                    type: category === 'Advance Payment' || category === 'Guest Advance / Fare' ? 'Advance' : 'Payment',
+                    amount: numAmount,
+                    date: txDate,
+                    description: `Payment received${resolvedBooking ? ` for ${resolvedBooking.bookingId}` : ''} via Cash${reference ? ` (Ref: ${reference})` : ''}`,
+                    referenceId: resolvedBooking ? resolvedBooking._id : tx._id
+                });
+            }
+        } catch (syncErr) {
+            console.error('Error syncing direct cash entry to booking/client ledger:', syncErr);
+        }
     }
 
     res.status(201).json(tx);
