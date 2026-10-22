@@ -260,8 +260,8 @@ const updateBooking = asyncHandler(async (req, res) => {
     if (guestFuelAmount !== undefined) {
         booking.guestFuelAmount = Number(guestFuelAmount) || 0;
     }
-    const fuelDeduction = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
-    booking.balanceDue = Math.max(0, booking.totalAmount - (booking.advancePaid || 0) - fuelDeduction);
+    // Never deduct less than guest-paid Fuel records
+    const fuelDeduction = await require('../utils/guestFuel').applyGuestFuelFloor(booking);
     if (booking.totalAmount > 0 && booking.balanceDue <= 0) {
         booking.paymentStatus = 'Full Received';
     } else if (((booking.advancePaid || 0) + fuelDeduction) > 0 && booking.balanceDue > 0) {

@@ -9,6 +9,7 @@ const Company = require('../models/Company');
 const { removeFinancialTransaction } = require('../services/transactionSyncService');
 const { getNextClientCode } = require('../models/Sequence');
 const asyncHandler = require('express-async-handler');
+const { applyGuestFuelFloor } = require('../utils/guestFuel');
 
 // @desc    Get DRS duties for a company by date, view, or date range
 // @route   GET /api/drs/:companyId
@@ -445,8 +446,8 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                 if (req.body.guestFuelAmount !== undefined) {
                     bkg.guestFuelAmount = Number(req.body.guestFuelAmount) || 0;
                 }
-                const fuelDed = bkg.guestFuelFilled ? (Number(bkg.guestFuelAmount) || 0) : 0;
-                bkg.balanceDue = Math.max(0, (Number(bkg.totalAmount) || 0) - (Number(bkg.advancePaid) || 0) - fuelDed);
+                // Never deduct less than guest-paid Fuel records (prevents DRS edits from wiping them)
+                const fuelDed = await applyGuestFuelFloor(bkg);
                 if (bkg.totalAmount > 0 && bkg.balanceDue <= 0) {
                     bkg.paymentStatus = 'Full Received';
                 } else if (((bkg.advancePaid || 0) + fuelDed) > 0 && bkg.balanceDue > 0) {

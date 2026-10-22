@@ -1366,3 +1366,13 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-10-22T12:00:48.562Z] CRON: Cron Jobs Initialized
 [2026-10-22T12:05:56.565Z] CRON: Cron Jobs Initialized
 [2026-10-22T12:06:35.906Z] CRON: Cron Jobs Initialized
+[2026-10-22T12:30:31.505Z] Login attempt started
+[2026-10-22T12:30:31.506Z] Login request for: Kavishuser1
+[2026-10-22T12:30:32.904Z] User found: Yatree (Role: Admin)
+[2026-10-22T12:30:33.045Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-22T12:30:33.046Z] Password matched
+[2026-10-22T12:30:33.046Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-22T12:30:49.020Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-22T12:34:01.108Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-22T12:34:47.232Z] CRON: Cron Jobs Initialized
+[2026-10-22T12:34:52.549Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
