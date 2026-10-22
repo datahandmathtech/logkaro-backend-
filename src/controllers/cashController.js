@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const asyncHandler = require('express-async-handler');
 const CashTransaction = require('../models/CashTransaction');
 const BankAccount = require('../models/BankAccount');
@@ -16,17 +17,20 @@ const getCashTransactions = asyncHandler(async (req, res) => {
     const { date, month, year, search, category } = req.query;
 
     let query = { company: companyId };
+    let startOfPeriod = null;
 
     if (date) {
         const startOfDay = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
         const endOfDay = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
         query.date = { $gte: startOfDay, $lte: endOfDay };
+        startOfPeriod = startOfDay;
     } else if (month && year) {
         const m = parseInt(month);
         const y = parseInt(year);
         const startDate = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).startOf('month').toJSDate();
         const endDate = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).endOf('month').toJSDate();
         query.date = { $gte: startDate, $lte: endDate };
+        startOfPeriod = startDate;
     }
 
     if (category && category !== 'all') {
@@ -58,6 +62,34 @@ const getCashTransactions = asyncHandler(async (req, res) => {
         else if (tx.type === 'OUT') totalOut += tx.amount;
     }
 
+    // Opening & Closing Balance for queried period
+    let openingBalance = 0;
+    if (startOfPeriod && mongoose.Types.ObjectId.isValid(companyId)) {
+        try {
+            const priorAgg = await CashTransaction.aggregate([
+                {
+                    $match: {
+                        company: new mongoose.Types.ObjectId(companyId),
+                        date: { $lt: startOfPeriod }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalIn: { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$amount', 0] } },
+                        totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$amount', 0] } }
+                    }
+                }
+            ]);
+            if (priorAgg.length > 0) {
+                openingBalance = (priorAgg[0].totalIn || 0) - (priorAgg[0].totalOut || 0);
+            }
+        } catch (priorErr) {
+            console.error('Error calculating prior cash balance:', priorErr);
+        }
+    }
+    const closingBalance = openingBalance + totalIn - totalOut;
+
     // Company current cash in hand balance
     const company = await Company.findById(companyId);
     let cashBalance = company?.cashBalance ?? 0;
@@ -79,9 +111,11 @@ const getCashTransactions = asyncHandler(async (req, res) => {
 
     res.json({
         stats: {
+            openingBalance,
             totalIn,
             totalOut,
             periodBalance: totalIn - totalOut,
+            closingBalance,
             currentBalance: cashBalance
         },
         transactions
@@ -347,9 +381,11 @@ const updateCashTransaction = asyncHandler(async (req, res) => {
     const { amount, description, category, reference, receiptPhoto, date } = req.body;
     const oldAmount = tx.amount;
     const oldType = tx.type;
+    const newAmount = amount !== undefined && amount !== '' ? Number(amount) : oldAmount;
+    const diff = newAmount - oldAmount;
+    const parsedDate = date !== undefined && date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : tx.date;
 
     if (amount !== undefined) {
-        const newAmount = Number(amount);
         tx.amount = newAmount;
 
         // Adjust company cash balance
@@ -363,12 +399,106 @@ const updateCashTransaction = asyncHandler(async (req, res) => {
         }
     }
 
+    // Sync Booking, Lead, and LedgerEntry if linked
+    try {
+        if (tx.bookingRef) {
+            const Booking = require('../models/Booking');
+            const Lead = require('../models/Lead');
+            const booking = await Booking.findById(tx.bookingRef);
+            if (booking) {
+                const bkgUpdates = {};
+                if (diff !== 0) {
+                    const updatedAdv = oldType === 'IN'
+                        ? Math.max(0, (booking.advancePaid || 0) + diff)
+                        : (booking.advancePaid || 0) - diff;
+                    bkgUpdates.advancePaid = updatedAdv;
+                    const fuelDed = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
+                    bkgUpdates.balanceDue = Math.max(0, (Number(booking.totalAmount) || 0) - updatedAdv - fuelDed);
+                    bkgUpdates.paymentStatus = bkgUpdates.balanceDue <= 0 ? 'Full Received' : ((updatedAdv + fuelDed) > 0 ? 'Partial' : 'Pending');
+                }
+                if (date) {
+                    bkgUpdates.advanceDate = parsedDate;
+                    if (booking.lead) {
+                        const leadUpdates = { advanceDate: parsedDate };
+                        if (diff !== 0 && oldType === 'IN') {
+                            leadUpdates.advancePayment = bkgUpdates.advancePaid;
+                        }
+                        await Lead.findByIdAndUpdate(
+                            booking.lead,
+                            { $set: leadUpdates },
+                            { timestamps: false }
+                        );
+                    }
+                }
+                if (Object.keys(bkgUpdates).length > 0) {
+                    await Booking.findByIdAndUpdate(booking._id, { $set: bkgUpdates });
+                }
+                const refIds = [booking._id, tx._id];
+                if (booking.lead) refIds.push(booking.lead);
+                let ledgerMatch = await LedgerEntry.findOne({
+                    $or: [
+                        { sourceId: tx._id },
+                        { referenceId: tx._id }
+                    ]
+                });
+                if (!ledgerMatch && tx.sourceId) {
+                    ledgerMatch = await LedgerEntry.findById(tx.sourceId);
+                }
+                if (!ledgerMatch) {
+                    ledgerMatch = await LedgerEntry.findOne({
+                        client: booking.client,
+                        type: { $in: ['Advance', 'Payment'] },
+                        amount: oldAmount
+                    });
+                }
+                if (!ledgerMatch) {
+                    ledgerMatch = await LedgerEntry.findOne({
+                        referenceId: { $in: refIds },
+                        type: { $in: ['Advance', 'Payment'] },
+                        amount: oldAmount
+                    });
+                }
+                if (!ledgerMatch) {
+                    ledgerMatch = await LedgerEntry.findOne({
+                        referenceId: { $in: refIds },
+                        type: { $in: ['Advance', 'Payment'] }
+                    });
+                }
+                if (ledgerMatch) {
+                    ledgerMatch.amount = newAmount;
+                    if (date) ledgerMatch.date = parsedDate;
+                    if (reference) ledgerMatch.reference = reference;
+                    await ledgerMatch.save();
+                }
+            }
+        } else {
+            let directLedger = await LedgerEntry.findOne({
+                $or: [
+                    { referenceId: tx._id },
+                    { sourceId: tx._id }
+                ],
+                type: { $in: ['Advance', 'Payment'] }
+            });
+            if (!directLedger && tx.sourceId) {
+                directLedger = await LedgerEntry.findById(tx.sourceId);
+            }
+            if (directLedger) {
+                directLedger.amount = newAmount;
+                if (date) directLedger.date = parsedDate;
+                if (reference) directLedger.reference = reference;
+                await directLedger.save();
+            }
+        }
+    } catch (syncErr) {
+        console.error('Error syncing cash transaction edit to Booking/Lead/Ledger:', syncErr);
+    }
+
     if (description !== undefined) tx.description = description;
     if (category !== undefined) tx.category = category;
     if (reference !== undefined) tx.reference = reference;
     if (receiptPhoto !== undefined) tx.receiptPhoto = receiptPhoto;
-    if (date !== undefined) {
-        tx.date = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate();
+    if (date !== undefined && date) {
+        tx.date = parsedDate;
     }
 
     const updated = await tx.save();

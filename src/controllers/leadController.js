@@ -335,6 +335,11 @@ const updateLead = asyncHandler(async (req, res) => {
         req.body.totalAmount = Number(req.body.totalAmount) || 0;
     }
 
+    // Preserve advanceDate on confirmed leads so rate revisions never wipe out conversion dates
+    if (!req.body.advanceDate && lead.advanceDate) {
+        delete req.body.advanceDate;
+    }
+
     if (req.body.priority === 'Lost' || req.body.status === 'Lost' || req.body.status === 'Cancelled') {
         req.body.priority = 'Lost';
         req.body.status = 'Lost';
@@ -344,11 +349,60 @@ const updateLead = asyncHandler(async (req, res) => {
         }
     }
 
+    const isAlreadyConfirmed = lead.status === 'Confirmed' || lead.status === 'Converted' || Boolean(lead.bookingRef || lead.bookingId);
     const updatedLead = await Lead.findByIdAndUpdate(
         req.params.id,
         req.body,
-        { new: true, runValidators: true }
+        { new: true, runValidators: true, timestamps: !isAlreadyConfirmed }
     );
+
+    // If this lead is already converted to a Booking, sync revised package rates/details to the Booking
+    if (isAlreadyConfirmed && updatedLead) {
+        try {
+            const bkgMatch = {
+                $or: [
+                    ...(updatedLead.bookingRef ? [{ _id: updatedLead.bookingRef }] : []),
+                    { lead: updatedLead._id },
+                    ...(updatedLead.bookingId ? [{ bookingId: updatedLead.bookingId }] : []),
+                    ...(updatedLead.clientCode ? [{ clientCode: updatedLead.clientCode }, { bookingId: updatedLead.clientCode }] : [])
+                ]
+            };
+            const linkedBkg = await Booking.findOne(bkgMatch);
+            if (linkedBkg) {
+                if (req.body.totalAmount !== undefined && Number(req.body.totalAmount) > 0) {
+                    linkedBkg.totalAmount = Number(req.body.totalAmount);
+                    const fuelDed = linkedBkg.guestFuelFilled ? (Number(linkedBkg.guestFuelAmount) || 0) : 0;
+                    linkedBkg.balanceDue = Math.max(0, linkedBkg.totalAmount - (Number(linkedBkg.advancePaid) || 0) - fuelDed);
+                    linkedBkg.paymentStatus = linkedBkg.balanceDue <= 0 ? 'Full Received' : (((Number(linkedBkg.advancePaid) || 0) + fuelDed) > 0 ? 'Partial' : 'Pending');
+                }
+                if (req.body.clientName) linkedBkg.clientName = req.body.clientName;
+                if (req.body.mobileNumber) linkedBkg.mobileNumber = req.body.mobileNumber;
+                if (req.body.travelStartDate) linkedBkg.travelStartDate = req.body.travelStartDate;
+                if (req.body.travelEndDate) linkedBkg.travelEndDate = req.body.travelEndDate;
+                if (req.body.carType) linkedBkg.vehicleType = req.body.carType;
+                if (req.body.vehicleMatrix) linkedBkg.vehicleMatrix = req.body.vehicleMatrix;
+                if (Array.isArray(req.body.itinerary) && req.body.itinerary.length > 0) {
+                    const existingItin = Array.isArray(linkedBkg.itinerary) ? linkedBkg.itinerary : [];
+                    linkedBkg.itinerary = req.body.itinerary.map((d, idx) => {
+                        const prev = existingItin.find(e => Number(e.day) === Number(d.day)) || existingItin[idx] || {};
+                        const prevObj = prev.toObject ? prev.toObject() : prev;
+                        return {
+                            ...prevObj,
+                            ...d,
+                            driverId: d.driverId || prevObj.driverId || null,
+                            driverName: d.driverName || prevObj.driverName || '',
+                            driverPhone: d.driverPhone || prevObj.driverPhone || '',
+                            vehicleId: d.vehicleId || prevObj.vehicleId || null,
+                            vehicleNumber: d.vehicleNumber || prevObj.vehicleNumber || ''
+                        };
+                    });
+                }
+                await linkedBkg.save({ validateBeforeSave: false });
+            }
+        } catch (syncBkgErr) {
+            console.error('Error syncing lead rate revision to booking:', syncBkgErr);
+        }
+    }
 
     res.json(updatedLead);
 });
@@ -478,20 +532,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         referenceId: lead._id
     });
 
-    // Create Advance Payment Entry if paid
-    if (advance > 0) {
-        await LedgerEntry.create({
-            client: client._id,
-            company: lead.company,
-            type: 'Advance',
-            amount: advance,
-            date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
-            description: `Advance received for Booking ${bookingId} via ${paymentMode || 'Cash'} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
-            referenceId: lead._id
-        });
-    }
-
-    // Record into Cash Book or Bank Book
+    // Record into Cash Book or Bank Book & Create Advance Payment Entry if paid
     let bank = null;
     if (advance > 0) {
         const isCash = (
@@ -500,6 +541,24 @@ const convertToBooking = asyncHandler(async (req, res) => {
             paymentMode === 'Cash to Company' ||
             (paymentMode && paymentMode.toLowerCase().includes('cash'))
         );
+
+        if (!isCash && bankAccountId) {
+            bank = await BankAccount.findById(bankAccountId);
+        }
+
+        const effectiveModeLabel = isCash ? 'Cash' : (bank?.bankName || paymentMode || 'Cash');
+
+        await LedgerEntry.create({
+            client: client._id,
+            company: lead.company,
+            type: 'Advance',
+            amount: advance,
+            date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
+            description: `Advance received for Booking ${bookingId} via ${effectiveModeLabel} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
+            referenceId: lead._id,
+            bankName: isCash ? 'Cash' : (bank?.bankName || ''),
+            paymentMode: effectiveModeLabel
+        });
 
         if (isCash) {
             try {
@@ -525,30 +584,27 @@ const convertToBooking = asyncHandler(async (req, res) => {
             } catch (cashErr) {
                 console.error('Error creating cash transaction for advance:', cashErr);
             }
-        } else if (bankAccountId) {
-            bank = await BankAccount.findById(bankAccountId);
-            if (bank) {
-                await BankTransaction.create({
-                    company: lead.company,
-                    bankAccount: bank._id,
-                    bankName: bank.bankName,
-                    type: 'IN',
-                    amount: advance,
-                    category: 'Booking Advance',
-                    paymentMode: paymentMode || 'UPI / QR Code',
-                    reference: paymentReference || '',
-                    paymentScreenshot: paymentScreenshot || '',
-                    description: `Advance Payment Received - ${lead.clientName}`,
-                    leadRef: lead._id,
-                    clientRef: client._id,
-                    sourceId: lead._id,
-                    sourceType: 'LeadAdvance',
-                    date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
-                    createdBy: req.user ? req.user._id : null
-                });
-                bank.currentBalance += advance;
-                await bank.save();
-            }
+        } else if (bank) {
+            await BankTransaction.create({
+                company: lead.company,
+                bankAccount: bank._id,
+                bankName: bank.bankName,
+                type: 'IN',
+                amount: advance,
+                category: 'Booking Advance',
+                paymentMode: paymentMode || 'UPI / QR Code',
+                reference: paymentReference || '',
+                paymentScreenshot: paymentScreenshot || '',
+                description: `Advance Payment Received - ${lead.clientName}`,
+                leadRef: lead._id,
+                clientRef: client._id,
+                sourceId: lead._id,
+                sourceType: 'LeadAdvance',
+                date: advancePaymentDate ? new Date(advancePaymentDate) : new Date(),
+                createdBy: req.user ? req.user._id : null
+            });
+            bank.currentBalance += advance;
+            await bank.save();
         }
     }
 

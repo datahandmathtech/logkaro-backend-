@@ -256,9 +256,10 @@ const updateBankTransaction = asyncHandler(async (req, res) => {
         throw new Error('Transaction not found');
     }
 
-    const newAmount = Number(amount);
+    const newAmount = amount !== undefined && amount !== '' ? Number(amount) : tx.amount;
     const oldAmount = tx.amount;
     const diff = newAmount - oldAmount;
+    const parsedDate = date ? new Date(date) : tx.date;
 
     // Update bank balance
     if (diff !== 0) {
@@ -273,42 +274,117 @@ const updateBankTransaction = asyncHandler(async (req, res) => {
         }
     }
 
-    // Update Booking advancePaid if linked
-    if (tx.bookingRef) {
+    // Update Booking, Lead, and LedgerEntry if linked
+    try {
         const Booking = require('../models/Booking');
-        const booking = await Booking.findById(tx.bookingRef);
+        const Lead = require('../models/Lead');
+        let booking = tx.bookingRef ? await Booking.findById(tx.bookingRef) : null;
+
         if (booking) {
             let noteStr = '';
+            const bkgUpdates = {};
             if (diff !== 0) {
-                if (tx.type === 'IN') {
-                    booking.advancePaid = Math.max(0, (booking.advancePaid || 0) + diff);
-                } else {
-                    booking.advancePaid = (booking.advancePaid || 0) - diff;
-                }
+                const updatedAdv = tx.type === 'IN'
+                    ? Math.max(0, (booking.advancePaid || 0) + diff)
+                    : (booking.advancePaid || 0) - diff;
+                bkgUpdates.advancePaid = updatedAdv;
+                const fuelDed = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
+                bkgUpdates.balanceDue = Math.max(0, (Number(booking.totalAmount) || 0) - updatedAdv - fuelDed);
+                bkgUpdates.paymentStatus = bkgUpdates.balanceDue <= 0 ? 'Full Received' : ((updatedAdv + fuelDed) > 0 ? 'Partial' : 'Pending');
                 noteStr += `\n[System]: Payment amount edited in Bank Book from ${oldAmount} to ${newAmount} on ${new Date().toLocaleDateString()}.`;
             }
-            
-            // ALWAYS sync the date if it was changed
-            if (date && booking.lead) {
-                const Lead = require('../models/Lead');
-                const lead = await Lead.findById(booking.lead);
-                if (lead) {
-                    lead.advanceDate = new Date(date);
-                    await lead.save();
-                    noteStr += `\n[System]: Payment date edited in Bank Book to ${new Date(date).toLocaleDateString()}.`;
+
+            if (date) {
+                bkgUpdates.advanceDate = parsedDate;
+                noteStr += `\n[System]: Payment date edited in Bank Book to ${parsedDate.toLocaleDateString()}.`;
+                if (booking.lead) {
+                    const leadUpdates = { advanceDate: parsedDate };
+                    if (diff !== 0 && tx.type === 'IN') {
+                        leadUpdates.advancePayment = bkgUpdates.advancePaid;
+                    }
+                    await Lead.findByIdAndUpdate(
+                        booking.lead,
+                        { $set: leadUpdates },
+                        { timestamps: false }
+                    );
                 }
             }
-            
+
             if (noteStr) {
-                booking.notes = (booking.notes || '') + noteStr;
+                bkgUpdates.notes = (booking.notes || '') + noteStr;
             }
-            await booking.save();
+            if (Object.keys(bkgUpdates).length > 0) {
+                await Booking.findByIdAndUpdate(booking._id, { $set: bkgUpdates });
+            }
+
+            // Also sync matching Client Ledger entry (Advance / Payment)
+            const refIds = [booking._id, tx._id];
+            if (booking.lead) refIds.push(booking.lead);
+            let ledgerMatch = await LedgerEntry.findOne({
+                $or: [
+                    { sourceId: tx._id },
+                    { referenceId: tx._id }
+                ]
+            });
+            if (!ledgerMatch && tx.sourceId) {
+                ledgerMatch = await LedgerEntry.findById(tx.sourceId);
+            }
+            if (!ledgerMatch) {
+                // Match by booking/client and matching oldAmount
+                ledgerMatch = await LedgerEntry.findOne({
+                    client: booking.client,
+                    type: { $in: ['Advance', 'Payment'] },
+                    amount: oldAmount
+                });
+            }
+            if (!ledgerMatch) {
+                ledgerMatch = await LedgerEntry.findOne({
+                    referenceId: { $in: refIds },
+                    type: { $in: ['Advance', 'Payment'] },
+                    amount: oldAmount
+                });
+            }
+            if (!ledgerMatch) {
+                // Fallback to any matching advance/payment for this booking
+                ledgerMatch = await LedgerEntry.findOne({
+                    referenceId: { $in: refIds },
+                    type: { $in: ['Advance', 'Payment'] }
+                });
+            }
+            if (ledgerMatch) {
+                ledgerMatch.amount = newAmount;
+                if (date) ledgerMatch.date = parsedDate;
+                if (paymentMode) ledgerMatch.paymentMode = paymentMode;
+                if (reference) ledgerMatch.reference = reference;
+                await ledgerMatch.save();
+            }
+        } else {
+            // Even if not linked via bookingRef, sync any direct LedgerEntry referencing this transaction
+            let directLedger = await LedgerEntry.findOne({
+                $or: [
+                    { referenceId: tx._id },
+                    { sourceId: tx._id }
+                ],
+                type: { $in: ['Advance', 'Payment'] }
+            });
+            if (!directLedger && tx.sourceId) {
+                directLedger = await LedgerEntry.findById(tx.sourceId);
+            }
+            if (directLedger) {
+                directLedger.amount = newAmount;
+                if (date) directLedger.date = parsedDate;
+                if (paymentMode) directLedger.paymentMode = paymentMode;
+                if (reference) directLedger.reference = reference;
+                await directLedger.save();
+            }
         }
+    } catch (syncErr) {
+        console.error('Error syncing bank transaction edit to Booking/Lead/Ledger:', syncErr);
     }
 
     // Update transaction fields
     tx.amount = newAmount;
-    if (date) tx.date = date;
+    if (date) tx.date = parsedDate;
     if (description !== undefined) tx.description = description;
     if (category !== undefined) tx.category = category;
     if (paymentMode !== undefined) tx.paymentMode = paymentMode;

@@ -84,7 +84,16 @@ const getBookings = asyncHandler(async (req, res) => {
         })
         .sort({ createdAt: -1 });
 
-    res.json(bookings);
+    const sanitizedBookings = bookings.map(b => {
+        const bObj = b.toObject ? b.toObject() : b;
+        const fuelDed = (bObj.guestFuelFilled || Number(bObj.guestFuelAmount) > 0) ? (Number(bObj.guestFuelAmount) || 0) : 0;
+        if (fuelDed > 0) {
+            bObj.balanceDue = Math.max(0, (Number(bObj.totalAmount) || 0) - (Number(bObj.advancePaid) || 0) - fuelDed);
+        }
+        return bObj;
+    });
+
+    res.json(sanitizedBookings);
 });
 
 // @desc    Get single booking by ID
@@ -146,7 +155,13 @@ const updateBooking = asyncHandler(async (req, res) => {
     // Core edit fields
     if (vehicleType) booking.vehicleType = vehicleType;
     if (numberOfCars !== undefined) booking.numberOfCars = Number(numberOfCars);
-    if (totalAmount !== undefined) booking.totalAmount = Number(totalAmount);
+    if (totalAmount !== undefined) {
+        booking.totalAmount = Number(totalAmount);
+        booking.packagePrice = Number(totalAmount);
+    } else if (req.body.packagePrice !== undefined) {
+        booking.totalAmount = Number(req.body.packagePrice);
+        booking.packagePrice = Number(req.body.packagePrice);
+    }
     if (travelStartDate) booking.travelStartDate = new Date(travelStartDate);
     if (travelEndDate) booking.travelEndDate = new Date(travelEndDate);
     if (isBreakTour !== undefined) booking.isBreakTour = Boolean(isBreakTour);
@@ -176,11 +191,21 @@ const updateBooking = asyncHandler(async (req, res) => {
 
     if (itinerary) {
         booking.itinerary = itinerary;
-        booking.markModified('itinerary');
         const itinTotal = itinerary.reduce((sum, d) => sum + (Number(d.amount) || Number(d.rate) || 0), 0);
-        if (itinTotal > 0) {
+        if ((totalAmount === undefined || Number(totalAmount) <= 0) && itinTotal > 0) {
             booking.totalAmount = itinTotal;
+        } else if (totalAmount !== undefined && Number(totalAmount) > 0 && Array.isArray(booking.itinerary) && booking.itinerary.length > 0) {
+            // If itinerary only had a lump sum on Day 1 (Days 2+ are 0), keep Day 1 amount in sync with the updated package fare
+            const restSum = booking.itinerary.slice(1).reduce((sum, d) => sum + (Number(d.amount) || Number(d.rate) || 0), 0);
+            if (restSum === 0 && (Number(booking.itinerary[0].amount) === Number(oldTotalAmount) || booking.itinerary.length === 1)) {
+                booking.itinerary[0].amount = Number(totalAmount);
+                if (Number(booking.itinerary[0].rate) > 0) {
+                    const qty = Number(booking.itinerary[0].quantity || booking.itinerary[0].vehicleCount) || 1;
+                    booking.itinerary[0].rate = Math.round(Number(totalAmount) / qty);
+                }
+            }
         }
+        booking.markModified('itinerary');
         if (itinerary[0]?.vehicleType) {
             booking.vehicleType = itinerary[0].vehicleType;
         }
@@ -366,14 +391,42 @@ const updateBooking = asyncHandler(async (req, res) => {
                 booking.drsDuties = updatedDutyIds;
                 await booking.save();
             } else if (booking.travelStartDate) {
-                await DRSDuty.updateMany(dutyMatch, {
-                    $set: {
-                        date: booking.travelStartDate,
-                        hotel: booking.pickupPoint || booking.pickupLocation || booking.source || 'Direct',
-                        pickupPoint: booking.pickupPoint || '',
-                        revenue: booking.totalAmount
+                const existingDuties = await DRSDuty.find(dutyMatch).sort({ date: 1, dayNo: 1 });
+                if (existingDuties.length === 1) {
+                    await DRSDuty.findByIdAndUpdate(existingDuties[0]._id, {
+                        $set: {
+                            date: booking.travelStartDate,
+                            hotel: booking.pickupPoint || booking.pickupLocation || booking.source || 'Direct',
+                            pickupPoint: booking.pickupPoint || '',
+                            revenue: booking.totalAmount
+                        }
+                    });
+                } else if (existingDuties.length > 1) {
+                    const currentSum = existingDuties.reduce((s, d) => s + (Number(d.revenue) || 0), 0);
+                    if (currentSum > 0 && oldTotalAmount && oldTotalAmount > 0) {
+                        let runningAssigned = 0;
+                        for (let i = 0; i < existingDuties.length; i++) {
+                            const d = existingDuties[i];
+                            let newRev;
+                            if (i === existingDuties.length - 1) {
+                                newRev = Math.max(0, booking.totalAmount - runningAssigned);
+                            } else {
+                                newRev = Math.round(Number(d.revenue || 0) * (booking.totalAmount / oldTotalAmount));
+                                runningAssigned += newRev;
+                            }
+                            await DRSDuty.findByIdAndUpdate(d._id, { $set: { revenue: newRev } });
+                        }
+                    } else {
+                        const perDuty = Math.round(booking.totalAmount / existingDuties.length);
+                        let runningAssigned = 0;
+                        for (let i = 0; i < existingDuties.length; i++) {
+                            const d = existingDuties[i];
+                            const rev = (i === existingDuties.length - 1) ? Math.max(0, booking.totalAmount - runningAssigned) : perDuty;
+                            runningAssigned += rev;
+                            await DRSDuty.findByIdAndUpdate(d._id, { $set: { revenue: rev } });
+                        }
                     }
-                });
+                }
             }
         }
     } catch (drsSyncErr) {
@@ -438,9 +491,12 @@ const updateBooking = asyncHandler(async (req, res) => {
                     activeDaysCount: booking.activeDaysCount || 0,
                     totalAmount: booking.totalAmount,
                     pickupPoint: booking.pickupPoint || booking.pickupLocation || '',
-                    dropPoint: booking.dropPoint || booking.dropLocation || ''
+                    dropPoint: booking.dropPoint || booking.dropLocation || '',
+                    ...(booking.vehicleMatrix ? { vehicleMatrix: booking.vehicleMatrix } : {}),
+                    ...(Array.isArray(booking.itinerary) && booking.itinerary.length > 0 ? { itinerary: booking.itinerary } : {})
                 }
-            }
+            },
+            { timestamps: false }
         );
     } catch (leadSyncErr) {
         console.error('Error cascading booking update to Lead:', leadSyncErr);
@@ -522,6 +578,30 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
         }
     }
 
+    const isCash = (
+        paymentMode === 'Cash' ||
+        paymentMode === 'Driver Cash' ||
+        paymentMode === 'Cash to Company' ||
+        (paymentMode && paymentMode.toLowerCase().includes('cash'))
+    );
+
+    let bank = null;
+    if (!isCash) {
+        try {
+            if (req.body.bankAccountId) {
+                bank = await BankAccount.findById(req.body.bankAccountId);
+            }
+            if (!bank) {
+                bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
+                    || await BankAccount.findOne({ company: booking.company });
+            }
+        } catch (bErr) {
+            console.error('Error finding bank account for payment:', bErr);
+        }
+    }
+
+    const effectiveBankLabel = isCash ? 'Cash' : (bank?.bankName || paymentMode || 'Bank');
+
     // Create Ledger Entry
     await LedgerEntry.create({
         client: booking.client,
@@ -529,19 +609,14 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
         type: 'Payment',
         amount: paymentAmount,
         date: paymentDate ? new Date(paymentDate) : new Date(),
-        description: `Payment received for ${booking.bookingId} (${booking.clientCode || ''}) via ${paymentMode || 'Cash'} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
-        referenceId: booking._id
+        description: `Payment received for ${booking.bookingId} (${booking.clientCode || ''}) via ${effectiveBankLabel} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
+        referenceId: booking._id,
+        bankName: isCash ? 'Cash' : (bank?.bankName || ''),
+        paymentMode: effectiveBankLabel
     });
 
     // Sync to Cash Book or Bank Book depending on paymentMode
     try {
-        const isCash = (
-            paymentMode === 'Cash' ||
-            paymentMode === 'Driver Cash' ||
-            paymentMode === 'Cash to Company' ||
-            (paymentMode && paymentMode.toLowerCase().includes('cash'))
-        );
-
         if (isCash) {
             await CashTransaction.create({
                 company: booking.company,
@@ -562,37 +637,26 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
             await Company.findByIdAndUpdate(booking.company, {
                 $inc: { cashBalance: paymentAmount }
             });
-        } else {
-            let bank = null;
-            if (req.body.bankAccountId) {
-                bank = await BankAccount.findById(req.body.bankAccountId);
-            }
-            if (!bank) {
-                bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
-                    || await BankAccount.findOne({ company: booking.company });
-            }
-
-            if (bank) {
-                await BankTransaction.create({
-                    company: booking.company,
-                    bankAccount: bank._id,
-                    bankName: bank.bankName || '',
-                    type: 'IN',
-                    amount: paymentAmount,
-                    paymentMode: paymentMode || 'Bank Transfer / NEFT',
-                    category: 'Booking Payment',
-                    reference: paymentReference || '',
-                    description: `Payment Received - ${booking.clientName}`,
-                    bookingRef: booking._id,
-                    clientRef: booking.client || null,
-                    sourceId: booking._id,
-                    sourceType: 'BookingPayment',
-                    date: paymentDate ? new Date(paymentDate) : new Date(),
-                    createdBy: req.user ? req.user._id : null
-                });
-                bank.currentBalance = (bank.currentBalance || 0) + paymentAmount;
-                await bank.save();
-            }
+        } else if (bank) {
+            await BankTransaction.create({
+                company: booking.company,
+                bankAccount: bank._id,
+                bankName: bank.bankName || '',
+                type: 'IN',
+                amount: paymentAmount,
+                paymentMode: paymentMode || 'Bank Transfer / NEFT',
+                category: 'Booking Payment',
+                reference: paymentReference || '',
+                description: `Payment Received - ${booking.clientName}`,
+                bookingRef: booking._id,
+                clientRef: booking.client || null,
+                sourceId: booking._id,
+                sourceType: 'BookingPayment',
+                date: paymentDate ? new Date(paymentDate) : new Date(),
+                createdBy: req.user ? req.user._id : null
+            });
+            bank.currentBalance = (bank.currentBalance || 0) + paymentAmount;
+            await bank.save();
         }
     } catch (paymentSyncErr) {
         console.error('Error syncing payment to Cash/Bank Book:', paymentSyncErr);
@@ -792,11 +856,33 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
 
         booking.itinerary = normalizedItinerary;
         booking.markModified('itinerary');
+
+        // Check if multiple cars exist across dates
+        const carCountByDate = {};
+        for (const it of normalizedItinerary) {
+            const dStr = it.date ? String(it.date).slice(0, 10) : 'unknown';
+            carCountByDate[dStr] = (carCountByDate[dStr] || 0) + 1;
+        }
+        const maxCars = Math.max(1, ...Object.values(carCountByDate));
+        if (maxCars > 1) {
+            booking.numberOfCars = maxCars;
+        }
+
         const sumDayAmounts = normalizedItinerary.reduce((acc, d) => acc + (Number(d.amount) || 0), 0);
+        const fuelDeduction = (booking.guestFuelFilled || Number(booking.guestFuelAmount) > 0) ? (Number(booking.guestFuelAmount) || 0) : 0;
         if (sumDayAmounts > 0) {
             booking.totalAmount = sumDayAmounts;
-            booking.balanceDue = Math.max(0, sumDayAmounts - (Number(booking.advancePaid) || 0));
+            booking.balanceDue = Math.max(0, sumDayAmounts - (Number(booking.advancePaid) || 0) - fuelDeduction);
+        } else {
+            booking.balanceDue = Math.max(0, (Number(booking.totalAmount) || 0) - (Number(booking.advancePaid) || 0) - fuelDeduction);
         }
+
+        if (booking.totalAmount > 0 && booking.balanceDue <= 0) {
+            booking.paymentStatus = 'Full Received';
+        } else if (((Number(booking.advancePaid) || 0) + fuelDeduction) > 0 && booking.balanceDue > 0) {
+            booking.paymentStatus = 'Partial';
+        }
+
         if (normalizedItinerary[0]?.pickupPoint) {
             booking.pickupPoint = normalizedItinerary[0].pickupPoint;
             booking.pickupLocation = normalizedItinerary[0].pickupPoint;
@@ -855,6 +941,60 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 });
             }
 
+            const isOutsideDay = Boolean(day.isOutside || day.isOutsideCar || day.ownerName || (vehicleNumber && (!vehicleId || day.vehicleId === 'custom')));
+            const vendorName = day.ownerName || day.vendorName || '';
+            const vendorPayout = day.buyAmount !== undefined && day.buyAmount !== '' ? Number(day.buyAmount) : 0;
+
+            // Sync Outside Car / Vendor into Vehicle collection (for Buy/Sell outside cars & vendor reporting)
+            if (isOutsideDay && vehicleNumber) {
+                try {
+                    const Vehicle = require('../models/Vehicle');
+                    const cleanCarNum = String(vehicleNumber).trim().toUpperCase();
+                    const bkgCodePart = String(booking.bookingCode || booking.bookingId || booking._id).slice(-6);
+                    const carKey = `${cleanCarNum}#${dateStr || 'duty'}#${bkgCodePart}`;
+
+                    let outVeh = await Vehicle.findOne({
+                        company: booking.company,
+                        isOutsideCar: true,
+                        $or: [
+                            { carNumber: carKey },
+                            { carNumber: { $regex: new RegExp(`^${cleanCarNum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#${dateStr || ''}`, 'i') } }
+                        ]
+                    });
+
+                    const vehPayload = {
+                        carNumber: outVeh?.carNumber || carKey,
+                        model: day.vehicleType || booking.vehicleType || 'Sedan',
+                        ownerName: vendorName || outVeh?.ownerName || 'Outside Vendor',
+                        buyAmount: vendorPayout || outVeh?.buyAmount || 0,
+                        dutyAmount: day.amount !== undefined ? Number(day.amount) : (outVeh?.dutyAmount || 0),
+                        driverName: driverName || outVeh?.driverName || '',
+                        guestName: booking.clientName || '',
+                        dutyType: dutyText,
+                        dutyTime: day.time || '09:00 AM',
+                        property: day.pickupPoint || booking.pickupLocation || '',
+                        dropLocation: booking.dropPoint || booking.dropLocation || '',
+                        transactionType: 'Buy',
+                        vehicleSource: 'External',
+                        isOutsideCar: true,
+                        permitType: 'Contract',
+                        carType: 'Other',
+                        company: booking.company,
+                        status: 'active',
+                        createdAt: day.date ? new Date(day.date) : new Date()
+                    };
+
+                    if (outVeh) {
+                        Object.assign(outVeh, vehPayload);
+                        await outVeh.save();
+                    } else {
+                        await Vehicle.create(vehPayload);
+                    }
+                } catch (outVehErr) {
+                    console.error('Error syncing outside vehicle in assignBookingDrivers:', outVehErr);
+                }
+            }
+
             if (matchingDuty) {
                 matchingDuty.bookingRef = booking._id;
                 matchingDuty.bookingId = booking.bookingId || booking.clientCode;
@@ -878,6 +1018,13 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 matchingDuty.km = day.km || matchingDuty.km || '';
                 matchingDuty.paymentStatus = effectivePaymentStatus;
                 matchingDuty.status = 'Assigned';
+                matchingDuty.guestFuelFilled = Boolean(booking.guestFuelFilled);
+                matchingDuty.guestFuelAmount = Number(booking.guestFuelAmount) || 0;
+                if (isOutsideDay) {
+                    matchingDuty.isOutsideCar = true;
+                    if (vendorName) matchingDuty.vendorName = vendorName;
+                    if (vendorPayout) matchingDuty.vendorPayout = vendorPayout;
+                }
                 await matchingDuty.save();
                 syncedDutyIds.push(matchingDuty._id);
             } else {
@@ -905,7 +1052,12 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     km: day.km || '',
                     paymentStatus: effectivePaymentStatus,
                     status: 'Assigned',
-                    isDirectBooking: false
+                    isDirectBooking: false,
+                    isOutsideCar: isOutsideDay,
+                    vendorName: vendorName,
+                    vendorPayout: vendorPayout,
+                    guestFuelFilled: Boolean(booking.guestFuelFilled),
+                    guestFuelAmount: Number(booking.guestFuelAmount) || 0
                 });
                 syncedDutyIds.push(newDuty._id);
             }

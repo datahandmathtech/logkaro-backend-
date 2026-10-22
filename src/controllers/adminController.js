@@ -3892,6 +3892,50 @@ const syncFuelToClientLedger = async (fuelEntry) => {
         });
         fuelEntry.client = clientDoc._id;
         fuelEntry.isDeductedFromLedger = true;
+
+        // Also update linked Booking so booking.guestFuelAmount and booking.balanceDue are properly adjusted
+        try {
+            let linkedBooking = null;
+            if (fuelEntry.booking && mongoose.Types.ObjectId.isValid(fuelEntry.booking)) {
+                linkedBooking = await Booking.findById(fuelEntry.booking);
+            } else if (fuelEntry.drsDuty) {
+                const d = await DRSDuty.findById(fuelEntry.drsDuty);
+                if (d && d.bookingRef) {
+                    linkedBooking = await Booking.findById(d.bookingRef);
+                } else if (d && d.bookingId) {
+                    linkedBooking = await Booking.findOne({ company: fuelEntry.company, $or: [{ bookingId: d.bookingId }, { clientCode: d.bookingId }] });
+                }
+            }
+            if (!linkedBooking && bkgIdStr) {
+                linkedBooking = await Booking.findOne({ company: fuelEntry.company, $or: [{ bookingId: bkgIdStr }, { clientCode: bkgIdStr }] });
+            }
+            if (!linkedBooking && clientDoc) {
+                linkedBooking = await Booking.findOne({ company: fuelEntry.company, client: clientDoc._id, bookingStatus: { $ne: 'Cancelled' } }).sort({ travelStartDate: -1 });
+            }
+
+            if (linkedBooking) {
+                const allFuelForBooking = await Fuel.find({
+                    company: fuelEntry.company,
+                    $or: [
+                        { client: clientDoc._id },
+                        { booking: linkedBooking._id }
+                    ],
+                    paymentSource: { $regex: /guest/i }
+                });
+                const totalGuestFuel = allFuelForBooking.reduce((acc, f) => acc + (Number(f.amount) || 0), 0);
+                
+                linkedBooking.guestFuelFilled = totalGuestFuel > 0;
+                linkedBooking.guestFuelAmount = totalGuestFuel;
+                const pkgAmt = Number(linkedBooking.totalAmount || linkedBooking.packagePrice) || 0;
+                const advPaid = Number(linkedBooking.advancePaid) || 0;
+                linkedBooking.balanceDue = Math.max(0, pkgAmt - advPaid - totalGuestFuel);
+                await linkedBooking.save();
+                console.log(`[syncFuelToClientLedger] Updated linked booking ${linkedBooking.bookingId}: guestFuelAmount=${totalGuestFuel}, balanceDue=${linkedBooking.balanceDue}`);
+            }
+        } catch (bkgSyncErr) {
+            console.error('[syncFuelToClientLedger] Error updating linked booking balance:', bkgSyncErr);
+        }
+
         console.log(`[syncFuelToClientLedger] Successfully synced fuel ₹${newAmount} to client ledger: ${clientDoc.name} (${clientDoc._id})`);
     } catch (err) {
         console.error('[syncFuelToClientLedger] Error:', err);
@@ -3903,6 +3947,7 @@ const removeFuelFromClientLedger = async (fuelEntry) => {
         if (!fuelEntry) return;
         const Client = require('../models/Client');
         const LedgerEntry = require('../models/LedgerEntry');
+        const Booking = require('../models/Booking');
 
         const existingLedger = await LedgerEntry.findOne({ referenceId: fuelEntry._id, type: 'Fuel' });
         if (existingLedger) {
@@ -3912,6 +3957,40 @@ const removeFuelFromClientLedger = async (fuelEntry) => {
                 clientDoc.totalPaid = (clientDoc.totalPaid || 0) - amt;
                 clientDoc.balance = (clientDoc.balance || 0) + amt;
                 await clientDoc.save();
+
+                // Revert linked booking balance
+                try {
+                    const bkg = await Booking.findOne({
+                        company: fuelEntry.company,
+                        $or: [
+                            { _id: fuelEntry.booking },
+                            { client: clientDoc._id }
+                        ],
+                        bookingStatus: { $ne: 'Cancelled' }
+                    }).sort({ travelStartDate: -1 });
+
+                    if (bkg) {
+                        const FuelModel = require('../models/Fuel');
+                        const allFuel = await FuelModel.find({
+                            _id: { $ne: fuelEntry._id },
+                            company: fuelEntry.company,
+                            $or: [
+                                { client: clientDoc._id },
+                                { booking: bkg._id }
+                            ],
+                            paymentSource: { $regex: /guest/i }
+                        });
+                        const totalGuestFuel = allFuel.reduce((acc, f) => acc + (Number(f.amount) || 0), 0);
+                        bkg.guestFuelFilled = totalGuestFuel > 0;
+                        bkg.guestFuelAmount = totalGuestFuel;
+                        const pkgAmt = Number(bkg.totalAmount || bkg.packagePrice) || 0;
+                        const advPaid = Number(bkg.advancePaid) || 0;
+                        bkg.balanceDue = Math.max(0, pkgAmt - advPaid - totalGuestFuel);
+                        await bkg.save();
+                    }
+                } catch (bkgRevErr) {
+                    console.error('[removeFuelFromClientLedger] Error reverting booking balance:', bkgRevErr);
+                }
             }
             await LedgerEntry.findByIdAndDelete(existingLedger._id);
             console.log(`[removeFuelFromClientLedger] Reverted fuel ledger entry for fuel: ${fuelEntry._id}`);

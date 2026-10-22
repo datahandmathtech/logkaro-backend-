@@ -5,7 +5,9 @@ const {
     getClientLedger,
     addPayment,
     updateClient,
-    createClient
+    createClient,
+    updateLedgerEntry,
+    deleteLedgerEntry
 } = require('../controllers/clientController');
 const { protect, adminOrExecutive, checkCompany } = require('../middleware/authMiddleware');
 
@@ -16,6 +18,10 @@ router.route('/')
 
 router.route(['/company/:companyId', '/:companyId'])
     .get(adminOrExecutive, checkCompany, getClients);
+
+router.route('/ledger/:id')
+    .put(adminOrExecutive, updateLedgerEntry)
+    .delete(adminOrExecutive, deleteLedgerEntry);
 
 router.route('/:id/ledger')
     .get(adminOrExecutive, getClientLedger);

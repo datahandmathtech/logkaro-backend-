@@ -40,6 +40,14 @@ const ledgerEntrySchema = new mongoose.Schema({
     referenceId: {
         type: mongoose.Schema.Types.ObjectId, // Can be Fuel ID, Lead ID, DRS ID, etc.
         default: null
+    },
+    bankName: {
+        type: String,
+        default: ''
+    },
+    paymentMode: {
+        type: String,
+        default: ''
     }
 }, { timestamps: true });
 

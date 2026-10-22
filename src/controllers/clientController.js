@@ -206,7 +206,90 @@ const getClientLedger = asyncHandler(async (req, res) => {
         query.date = { $gte: dateRange.start, $lte: dateRange.end };
     }
 
-    const entries = await LedgerEntry.find(query).sort({ date: -1, createdAt: -1 });
+    const entries = await LedgerEntry.find(query).sort({ date: -1, createdAt: -1 }).lean();
+
+    try {
+        const refIds = entries.map(e => e.referenceId).filter(Boolean);
+        const orClauses = [{ clientRef: req.params.id }];
+        if (refIds.length > 0) {
+            orClauses.push(
+                { bookingRef: { $in: refIds } },
+                { leadRef: { $in: refIds } },
+                { sourceId: { $in: refIds } }
+            );
+        }
+
+        const [bankTxs, cashTxs] = await Promise.all([
+            BankTransaction.find({ type: 'IN', $or: orClauses })
+                .populate('bankAccount', 'bankName')
+                .sort({ date: 1, createdAt: 1 })
+                .lean(),
+            CashTransaction.find({ type: 'IN', $or: orClauses })
+                .sort({ date: 1, createdAt: 1 })
+                .lean()
+        ]);
+
+        const usedBankTxIds = new Set();
+        const usedCashTxIds = new Set();
+
+        // Match chronologically (oldest to newest)
+        const chronological = [...entries].sort((a, b) => new Date(a.date) - new Date(b.date));
+        for (const entry of chronological) {
+            if (!['Payment', 'Advance'].includes(entry.type)) continue;
+            if (entry.bankName) continue;
+
+            const amt = Number(entry.amount) || 0;
+            const entryDay = entry.date ? new Date(entry.date).toISOString().split('T')[0] : '';
+
+            // 1. Try matching BankTransaction by exact amount + same date (or same referenceId)
+            let matchedBank = bankTxs.find(tx => {
+                if (usedBankTxIds.has(String(tx._id))) return false;
+                if (Number(tx.amount) !== amt) return false;
+                const txDay = tx.date ? new Date(tx.date).toISOString().split('T')[0] : '';
+                return txDay === entryDay;
+            });
+
+            if (!matchedBank) {
+                matchedBank = bankTxs.find(tx => {
+                    if (usedBankTxIds.has(String(tx._id))) return false;
+                    if (Number(tx.amount) !== amt) return false;
+                    if (entry.referenceId && (
+                        String(tx.bookingRef) === String(entry.referenceId) ||
+                        String(tx.leadRef) === String(entry.referenceId) ||
+                        String(tx.sourceId) === String(entry.referenceId)
+                    )) {
+                        return true;
+                    }
+                    return false;
+                });
+            }
+
+            if (!matchedBank) {
+                matchedBank = bankTxs.find(tx => !usedBankTxIds.has(String(tx._id)) && Number(tx.amount) === amt);
+            }
+
+            if (matchedBank) {
+                usedBankTxIds.add(String(matchedBank._id));
+                const bName = matchedBank.bankAccount?.bankName || matchedBank.bankName || '';
+                if (bName) {
+                    entry.bankName = bName;
+                    entry.paymentMode = bName;
+                    continue;
+                }
+            }
+
+            // 2. Try matching CashTransaction
+            const matchedCash = cashTxs.find(tx => !usedCashTxIds.has(String(tx._id)) && Number(tx.amount) === amt);
+            if (matchedCash || (entry.description && /via\s+(driver\s+)?cash/i.test(entry.description))) {
+                if (matchedCash) usedCashTxIds.add(String(matchedCash._id));
+                entry.bankName = 'Cash';
+                entry.paymentMode = 'Cash';
+            }
+        }
+    } catch (enrichErr) {
+        console.error('Error enriching client ledger with bank names:', enrichErr);
+    }
+
     res.json(entries);
 });
 
@@ -369,10 +452,228 @@ const createClient = asyncHandler(async (req, res) => {
     res.status(201).json(client);
 });
 
+// @desc    Update client ledger entry
+// @route   PUT /api/clients/ledger/:id
+// @access  Private/AdminOrExecutive
+const updateLedgerEntry = asyncHandler(async (req, res) => {
+    const entry = await LedgerEntry.findById(req.params.id);
+    if (!entry) {
+        res.status(404);
+        throw new Error('Ledger entry not found');
+    }
+
+    const { amount, date, description, paymentMode, bankAccountId, bankName, reference } = req.body;
+    const oldAmount = Number(entry.amount) || 0;
+    const newAmount = amount !== undefined && amount !== '' ? Number(amount) : oldAmount;
+    const diff = newAmount - oldAmount;
+    const parsedDate = date ? new Date(date) : entry.date;
+
+    // Update Client totals if amount changed
+    if (diff !== 0) {
+        const client = await Client.findById(entry.client);
+        if (client) {
+            client.totalPaid = Math.max(0, (client.totalPaid || 0) + diff);
+            client.balance = Math.max(0, (client.balance || 0) - diff);
+            await client.save();
+        }
+    }
+
+    // Update the ledger entry fields
+    entry.amount = newAmount;
+    if (date) entry.date = parsedDate;
+    if (paymentMode) entry.paymentMode = paymentMode;
+    if (bankName) entry.bankName = bankName;
+    if (description) {
+        entry.description = description;
+    } else if (paymentMode || reference) {
+        const modeLabel = bankName || paymentMode || 'Payment';
+        const refLabel = reference ? ` (Ref: ${reference})` : '';
+        entry.description = `${entry.type} received via ${modeLabel}${refLabel}`;
+    }
+    await entry.save();
+
+    // Sync to linked Booking & Lead
+    try {
+        const Booking = require('../models/Booking');
+        const Lead = require('../models/Lead');
+        
+        let booking = null;
+        if (entry.referenceId) {
+            booking = await Booking.findById(entry.referenceId);
+            if (!booking) {
+                booking = await Booking.findOne({ lead: entry.referenceId });
+            }
+        }
+        if (!booking && entry.client) {
+            booking = await Booking.findOne({ client: entry.client }).sort({ createdAt: -1 });
+        }
+
+        if (booking) {
+            const bkgUpdates = {};
+            if (diff !== 0) {
+                const updatedAdv = Math.max(0, (Number(booking.advancePaid) || 0) + diff);
+                bkgUpdates.advancePaid = updatedAdv;
+                const fuelDed = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
+                bkgUpdates.balanceDue = Math.max(0, (Number(booking.totalAmount) || 0) - updatedAdv - fuelDed);
+                bkgUpdates.paymentStatus = bkgUpdates.balanceDue <= 0 ? 'Full Received' : ((updatedAdv + fuelDed) > 0 ? 'Partial' : 'Pending');
+            }
+            if (entry.type === 'Advance' && bankName) {
+                bkgUpdates.bankName = bankName;
+            }
+            if (date && entry.type === 'Advance') {
+                bkgUpdates.advanceDate = parsedDate;
+            }
+            if (Object.keys(bkgUpdates).length > 0) {
+                await Booking.findByIdAndUpdate(booking._id, { $set: bkgUpdates });
+            }
+
+            if (booking.lead && entry.type === 'Advance') {
+                const leadUpdates = {};
+                if (diff !== 0) leadUpdates.advancePayment = (bkgUpdates.advancePaid !== undefined ? bkgUpdates.advancePaid : newAmount);
+                if (date) leadUpdates.advanceDate = parsedDate;
+                if (Object.keys(leadUpdates).length > 0) {
+                    await Lead.findByIdAndUpdate(booking.lead, { $set: leadUpdates }, { timestamps: false });
+                }
+            }
+        }
+
+        // Sync with Fuel, BankTransaction or CashTransaction
+        if (entry.type === 'Fuel') {
+            try {
+                const Fuel = require('../models/Fuel');
+                let fuelDoc = entry.referenceId ? await Fuel.findById(entry.referenceId) : null;
+                if (!fuelDoc && booking) {
+                    fuelDoc = await Fuel.findOne({ booking: booking._id, paymentSource: 'Guest' });
+                }
+                if (fuelDoc) {
+                    fuelDoc.amount = newAmount;
+                    if (date) fuelDoc.date = parsedDate;
+                    await fuelDoc.save();
+                }
+                if (booking) {
+                    booking.guestFuelFilled = newAmount > 0;
+                    booking.guestFuelAmount = newAmount;
+                    booking.balanceDue = Math.max(0, (Number(booking.totalAmount) || 0) - (Number(booking.advancePaid) || 0) - newAmount);
+                    booking.paymentStatus = booking.balanceDue <= 0 ? 'Full Received' : ((Number(booking.advancePaid) || 0) + newAmount > 0 ? 'Partial' : 'Pending');
+                    await booking.save();
+                }
+            } catch (fErr) {
+                console.error('Error syncing fuel entry:', fErr);
+            }
+        } else {
+            const isCash = (paymentMode && /cash/i.test(paymentMode)) || (bankName && /cash/i.test(bankName));
+
+            if (isCash) {
+                let cashTx = await CashTransaction.findOne({
+                    $or: [
+                        { sourceId: entry._id },
+                        { referenceId: entry._id },
+                        ...(entry.sourceId ? [{ _id: entry.sourceId }] : [])
+                    ]
+                });
+                if (!cashTx && booking) {
+                    cashTx = await CashTransaction.findOne({
+                        bookingRef: booking._id,
+                        amount: oldAmount
+                    });
+                }
+                if (!cashTx && booking) {
+                    cashTx = await CashTransaction.findOne({
+                        bookingRef: booking._id
+                    }).sort({ date: -1 });
+                }
+                if (cashTx) {
+                    cashTx.amount = newAmount;
+                    if (date) cashTx.date = parsedDate;
+                    if (reference) cashTx.reference = reference;
+                    await cashTx.save();
+                    if (diff !== 0) {
+                        await Company.findByIdAndUpdate(cashTx.company, { $inc: { cashBalance: diff } });
+                    }
+                }
+            } else {
+                let bankTx = await BankTransaction.findOne({
+                    $or: [
+                        { sourceId: entry._id },
+                        { referenceId: entry._id },
+                        ...(entry.sourceId ? [{ _id: entry.sourceId }] : [])
+                    ]
+                });
+                if (!bankTx && booking) {
+                    bankTx = await BankTransaction.findOne({
+                        bookingRef: booking._id,
+                        amount: oldAmount
+                    });
+                }
+                if (!bankTx && booking) {
+                    bankTx = await BankTransaction.findOne({
+                        bookingRef: booking._id
+                    }).sort({ date: -1 });
+                }
+                if (bankTx) {
+                    bankTx.amount = newAmount;
+                    if (date) bankTx.date = parsedDate;
+                    if (bankName) bankTx.bankName = bankName;
+                    if (bankAccountId) bankTx.bankAccount = bankAccountId;
+                    if (paymentMode) bankTx.paymentMode = paymentMode;
+                    if (reference) bankTx.reference = reference;
+                    await bankTx.save();
+                    if (diff !== 0) {
+                        await BankAccount.findByIdAndUpdate(bankTx.bankAccount, { $inc: { currentBalance: diff } });
+                    }
+                }
+            }
+        }
+    } catch (syncErr) {
+        console.error('Error syncing edited ledger entry:', syncErr);
+    }
+
+    res.json({ success: true, message: 'Ledger entry updated successfully', entry });
+});
+
+// @desc    Delete client ledger entry
+// @route   DELETE /api/clients/ledger/:id
+// @access  Private/AdminOrExecutive
+const deleteLedgerEntry = asyncHandler(async (req, res) => {
+    const entry = await LedgerEntry.findById(req.params.id);
+    if (!entry) {
+        res.status(404);
+        throw new Error('Ledger entry not found');
+    }
+
+    const amt = Number(entry.amount) || 0;
+    const client = await Client.findById(entry.client);
+    if (client) {
+        client.totalPaid = Math.max(0, (client.totalPaid || 0) - amt);
+        client.balance = Math.max(0, (client.balance || 0) + amt);
+        await client.save();
+    }
+
+    if (entry.referenceId) {
+        const Booking = require('../models/Booking');
+        let booking = await Booking.findById(entry.referenceId);
+        if (!booking) booking = await Booking.findOne({ lead: entry.referenceId });
+        if (booking) {
+            const updatedAdv = Math.max(0, (Number(booking.advancePaid) || 0) - amt);
+            const fuelDed = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
+            const balDue = Math.max(0, (Number(booking.totalAmount) || 0) - updatedAdv - fuelDed);
+            const pStatus = balDue <= 0 ? 'Full Received' : (updatedAdv > 0 ? 'Partial' : 'Pending');
+            await Booking.findByIdAndUpdate(booking._id, {
+                $set: { advancePaid: updatedAdv, balanceDue: balDue, paymentStatus: pStatus }
+            });
+        }
+    }
+
+    await entry.deleteOne();
+    res.json({ success: true, message: 'Ledger entry deleted successfully' });
+});
+
 module.exports = {
     getClients,
     getClientLedger,
     addPayment,
     updateClient,
-    createClient
+    createClient,
+    updateLedgerEntry,
+    deleteLedgerEntry
 };

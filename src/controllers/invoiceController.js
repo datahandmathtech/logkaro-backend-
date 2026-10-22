@@ -9,6 +9,77 @@ const { getNextSequence } = require('../models/Sequence');
 // Helper to round currency
 const round2 = (num) => Math.round((Number(num) + Number.EPSILON) * 100) / 100;
 
+/**
+ * Re-sequences all invoices for a company strictly in chronological order of invoiceDate.
+ * If invoice dates are equal, secondary sort is by createdAt.
+ * Earlier dates receive smaller invoice numbers.
+ */
+const resequenceCompanyInvoices = async (companyId) => {
+    try {
+        if (!companyId) return;
+        const allInvoices = await Invoice.find({ company: companyId })
+            .sort({ invoiceDate: 1, createdAt: 1 });
+
+        if (!allInvoices || allInvoices.length === 0) return;
+
+        // Check if there is an invoice ending with -00001
+        let minSeq = 2; // Default starting sequence is 2 (e.g. LK-INV-2026-00002)
+        if (allInvoices.some(inv => inv.invoiceNumber && inv.invoiceNumber.endsWith('-00001'))) {
+            minSeq = 1;
+        }
+
+        // Pass 1: Assign temporary numbers to avoid MongoDB unique index conflict
+        for (let i = 0; i < allInvoices.length; i++) {
+            const inv = allInvoices[i];
+            const targetSeq = minSeq + i;
+            const year = inv.invoiceDate ? new Date(inv.invoiceDate).getFullYear() : new Date().getFullYear();
+            const formattedSeq = `LK-INV-${year}-${String(targetSeq).padStart(5, '0')}`;
+            if (inv.invoiceNumber !== formattedSeq) {
+                await Invoice.findByIdAndUpdate(inv._id, { invoiceNumber: `LK-TEMP-${inv._id}` });
+            }
+        }
+
+        // Pass 2: Assign final formatted numbers
+        for (let i = 0; i < allInvoices.length; i++) {
+            const inv = allInvoices[i];
+            const targetSeq = minSeq + i;
+            const year = inv.invoiceDate ? new Date(inv.invoiceDate).getFullYear() : new Date().getFullYear();
+            const formattedSeq = `LK-INV-${year}-${String(targetSeq).padStart(5, '0')}`;
+            const oldNumber = inv.invoiceNumber;
+
+            if (oldNumber !== formattedSeq) {
+                await Invoice.findByIdAndUpdate(inv._id, { invoiceNumber: formattedSeq });
+
+                // Update linked booking notes if it contains the old invoice number
+                if (inv.booking) {
+                    const bkg = await Booking.findById(inv.booking);
+                    if (bkg && bkg.notes && oldNumber && bkg.notes.includes(oldNumber)) {
+                        bkg.notes = bkg.notes.replace(oldNumber, formattedSeq);
+                        await bkg.save();
+                    }
+                }
+
+                // Update ledger entries referencing this invoice
+                await LedgerEntry.updateMany(
+                    { referenceId: inv._id, type: 'Bill' },
+                    { description: `Tax Invoice ${formattedSeq} issued for ${inv.billTo?.name || 'Guest'}` }
+                );
+            }
+        }
+
+        // Keep Sequence model synced to highest sequence
+        const { Sequence } = require('../models/Sequence');
+        const maxSeq = minSeq + allInvoices.length - 1;
+        await Sequence.findOneAndUpdate(
+            { id: `LK-INV-${new Date().getFullYear()}` },
+            { $set: { seq: maxSeq } },
+            { upsert: true }
+        );
+    } catch (reseqErr) {
+        console.error('Error re-sequencing invoices chronologically:', reseqErr);
+    }
+};
+
 // @desc    Create a new Tax Invoice
 // @route   POST /api/invoices
 // @access  Private/AdminOrExecutive
@@ -215,7 +286,9 @@ const createInvoice = asyncHandler(async (req, res) => {
         );
     }
 
-    res.status(201).json(invoice);
+    await resequenceCompanyInvoices(companyId);
+    const finalizedInvoice = await Invoice.findById(invoice._id);
+    res.status(201).json(finalizedInvoice || invoice);
 });
 
 // Helper: Automatically create or update a Paid Tax Invoice when a booking's payment is settled (balanceDue <= 0)
@@ -339,7 +412,9 @@ const syncInvoiceForBooking = async (booking) => {
             invoiceGenerated: true
         });
 
-        return newInvoice;
+        await resequenceCompanyInvoices(booking.company);
+        const finalized = await Invoice.findById(newInvoice._id);
+        return finalized || newInvoice;
     } catch (err) {
         console.error('Error syncing invoice for paid booking:', err);
         return null;
@@ -353,24 +428,11 @@ const getInvoices = asyncHandler(async (req, res) => {
     const { status, search, startDate, endDate, page = 1, limit = 500 } = req.query;
     const companyId = req.params.companyId || req.user?.company;
 
-    // Auto-sync any fully paid (balanceDue <= 0) bookings for this company into Tax Invoices
+    // Ensure invoices are sequenced strictly chronologically by invoiceDate
     try {
-        const paidBookings = await Booking.find({
-            company: companyId,
-            bookingStatus: { $ne: 'Cancelled' },
-            totalAmount: { $gt: 0 },
-            $or: [
-                { balanceDue: { $lte: 0 } },
-                { paymentStatus: 'Full Received' },
-                { $expr: { $gte: ['$advancePaid', '$totalAmount'] } }
-            ]
-        });
-
-        for (const bkg of paidBookings) {
-            await syncInvoiceForBooking(bkg);
-        }
-    } catch (syncErr) {
-        console.error('Error auto-syncing paid bookings into invoices:', syncErr);
+        await resequenceCompanyInvoices(companyId);
+    } catch (reseqErr) {
+        console.error('Error re-sequencing invoices in getInvoices:', reseqErr);
     }
 
     const query = { company: companyId };
@@ -404,7 +466,7 @@ const getInvoices = asyncHandler(async (req, res) => {
         .populate('booking', 'bookingId clientCode travelStartDate travelEndDate vehicleType clientName mobileNumber totalAmount advancePaid balanceDue gstMode gstRate')
         .populate('client', 'name mobile balance')
         .populate('company', 'name gstNumber logoUrl ownerName whatsappNumber')
-        .sort({ invoiceDate: -1, createdAt: -1 })
+        .sort({ invoiceDate: -1, invoiceNumber: -1, createdAt: -1 })
         .limit(Number(limit))
         .skip((Number(page) - 1) * Number(limit));
 
@@ -539,6 +601,7 @@ const deleteInvoice = asyncHandler(async (req, res) => {
     }
 
     await invoice.deleteOne();
+    await resequenceCompanyInvoices(invoice.company);
     res.json({ message: 'Invoice removed successfully' });
 
 });
@@ -556,10 +619,13 @@ const updateInvoice = asyncHandler(async (req, res) => {
     
     if (req.body.billTo) invoice.billTo = req.body.billTo;
     if (req.body.gstMode) invoice.gstMode = req.body.gstMode;
+    if (req.body.invoiceDate) invoice.invoiceDate = new Date(req.body.invoiceDate);
     // can expand fields if needed
     
     await invoice.save();
-    res.json(invoice);
+    await resequenceCompanyInvoices(invoice.company);
+    const refreshed = await Invoice.findById(invoice._id) || invoice;
+    res.json(refreshed);
 });
 
 module.exports = {

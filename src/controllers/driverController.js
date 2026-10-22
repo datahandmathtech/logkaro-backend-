@@ -5,6 +5,8 @@ const Advance = require('../models/Advance');
 const Parking = require('../models/Parking');
 const Loan = require('../models/Loan');
 const Allowance = require('../models/Allowance');
+const DRSDuty = require('../models/DRSDuty');
+const Booking = require('../models/Booking');
 const { DateTime } = require('luxon');
 const DASHBOARD_CACHE = require('../utils/cache');
 
@@ -20,6 +22,57 @@ const logToFile = (msg) => {
         const logPath = path.join(process.cwd(), 'server_debug.log');
         fs.appendFileSync(logPath, `[${new Date().toISOString()}] DRIVER_CTRL: ${msg}\n`);
     } catch (e) { }
+};
+
+// Helper: fetch assigned upcoming duties for driver (from DRSDuty + Booking)
+const fetchDriverAssignedDuties = async (driverId, companyId) => {
+    try {
+        const nowIST = DateTime.now().setZone('Asia/Kolkata');
+        const startOfToday = nowIST.startOf('day').minus({ hours: 6 }).toJSDate();
+        const todayStr = nowIST.toFormat('yyyy-MM-dd');
+
+        const duties = await DRSDuty.find({
+            driver: driverId,
+            date: { $gte: startOfToday }
+        })
+        .populate('vehicle', 'carNumber model carType type brand')
+        .populate('bookingRef', 'bookingId clientCode clientName mobileNumber travelStartDate travelEndDate pickupLocation dropLocation specialRemarks notes')
+        .sort({ date: 1, time: 1 });
+
+        return duties.map(d => {
+            const dutyIST = d.date ? DateTime.fromJSDate(d.date).setZone('Asia/Kolkata') : null;
+            const dutyDateStr = dutyIST ? dutyIST.toFormat('yyyy-MM-dd') : '';
+            const isToday = dutyDateStr === todayStr;
+
+            const vehicleNum = d.vehicle?.carNumber || d.customCarNumber || d.vehicleNumber || 'Cab Assigned';
+            const vehicleModel = d.vehicle?.carType || d.vehicle?.model || d.carType || 'Cab';
+
+            return {
+                _id: d._id,
+                date: d.date,
+                dateStr: dutyDateStr,
+                dateFormatted: dutyIST ? dutyIST.toFormat('ccc, dd LLL yyyy') : '',
+                time: d.time || '09:00 AM',
+                dayNo: d.dayNo || 1,
+                clientName: d.clientName || d.bookingRef?.clientName || 'Guest',
+                mobileNumber: d.mobileNumber || d.bookingRef?.mobileNumber || '',
+                hotel: d.hotel || '',
+                pickupPoint: d.pickupPoint || d.bookingRef?.pickupLocation || d.hotel || '',
+                duty: d.duty || d.itinerary || 'Tour Duty',
+                carType: vehicleModel,
+                vehicleNumber: vehicleNum,
+                vehicleId: d.vehicle?._id || null,
+                bookingId: d.bookingId || d.bookingRef?.clientCode || d.bookingRef?.bookingId || '',
+                bookingRefId: d.bookingRef?._id || null,
+                status: d.status || 'Assigned',
+                isToday,
+                guestRemarks: d.guestRemarks || d.bookingRef?.specialRemarks || d.bookingRef?.notes || ''
+            };
+        });
+    } catch (err) {
+        console.error('fetchDriverAssignedDuties error:', err);
+        return [];
+    }
 };
 
 // @desc    Get driver dashboard / assigned vehicle
@@ -110,6 +163,8 @@ const getDriverDashboard = async (req, res) => {
 
     logToFile(`getDriverDashboard - Final Status: ${effectiveStatus}, Current Car: ${attendance?.vehicle?.carNumber || 'None'}`);
 
+    const upcomingRides = await fetchDriverAssignedDuties(req.user._id, companyId);
+
     res.json({
         driver: {
             _id: driver._id,
@@ -122,7 +177,9 @@ const getDriverDashboard = async (req, res) => {
         },
         vehicle: (attendance?.status === 'incomplete' ? attendance.vehicle : null) || driver.assignedVehicle || null,
         availableVehicles,
-        todayAttendance: (attendance && (attendance.date === today || attendance.status === 'incomplete')) ? attendance : null
+        todayAttendance: (attendance && (attendance.date === today || attendance.status === 'incomplete')) ? attendance : null,
+        upcomingRides,
+        upcomingRidesCount: upcomingRides.length
     });
 };
 
@@ -928,5 +985,25 @@ const recordAirCheck = async (req, res) => {
     }
 };
 
+// @desc    Get upcoming assigned rides for driver
+// @route   GET /api/driver/upcoming-rides
+// @access  Private/Driver
+const getDriverUpcomingRides = async (req, res) => {
+    try {
+        const driver = await User.findById(req.user._id);
+        const companyId = driver.company?._id || driver.company;
+        const rides = await fetchDriverAssignedDuties(req.user._id, companyId);
+        res.json({
+            success: true,
+            count: rides.length,
+            rides
+        });
+    } catch (err) {
+        console.error('getDriverUpcomingRides error:', err);
+        res.status(500).json({ message: 'Failed to fetch upcoming rides', error: err.message });
+    }
+};
+
 module.exports.recordAirCheck = recordAirCheck;
+module.exports.getDriverUpcomingRides = getDriverUpcomingRides;
 

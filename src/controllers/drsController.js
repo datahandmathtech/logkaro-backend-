@@ -409,6 +409,23 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
             }
             const bkg = await Booking.findOne({ $or: bkgOr });
             if (bkg) {
+                const oldTotalAmount = Number(bkg.totalAmount) || 0;
+
+                // Sum all DRS duties belonging to this booking
+                const sibQuery = [];
+                if (bkg._id) sibQuery.push({ bookingRef: bkg._id });
+                if (bkg.bookingId) sibQuery.push({ bookingId: bkg.bookingId });
+                if (bkg.clientCode) sibQuery.push({ bookingId: bkg.clientCode });
+                sibQuery.push({ _id: updatedDuty._id });
+
+                const allBookingDuties = await DRSDuty.find({ $or: sibQuery });
+                const totalDRSFare = allBookingDuties.reduce((s, d) => s + (Number(d.revenue) || 0), 0);
+
+                if (req.body.revenue !== undefined || (totalDRSFare > 0 && totalDRSFare !== oldTotalAmount)) {
+                    bkg.totalAmount = totalDRSFare;
+                    bkg.packagePrice = totalDRSFare;
+                }
+
                 if (updatedDuty.clientName) bkg.clientName = updatedDuty.clientName;
                 if (updatedDuty.mobileNumber) bkg.mobileNumber = updatedDuty.mobileNumber;
                 if (updatedDuty.hotel) {
@@ -433,6 +450,8 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                     bkg.paymentStatus = 'Full Received';
                 } else if (((bkg.advancePaid || 0) + fuelDed) > 0 && bkg.balanceDue > 0) {
                     bkg.paymentStatus = 'Partial';
+                } else {
+                    bkg.paymentStatus = 'Pending';
                 }
 
                 const dutyDate = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
@@ -527,9 +546,11 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                     const clientDoc = await Client.findById(bkg.client);
                     if (clientDoc) {
                         if (updatedDuty.clientName) clientDoc.name = updatedDuty.clientName;
-                        if (updatedDuty.mobileNumber) clientDoc.mobile = updatedDuty.mobileNumber;
-                        clientDoc.totalBilled = bkg.totalAmount;
-                        clientDoc.balance = Math.max(0, clientDoc.totalBilled - (clientDoc.totalPaid || 0));
+                        if (oldTotalAmount !== bkg.totalAmount) {
+                            const diff = bkg.totalAmount - oldTotalAmount;
+                            clientDoc.totalBilled = Math.max(0, (clientDoc.totalBilled || 0) + diff);
+                            clientDoc.balance = Math.max(0, (clientDoc.balance || 0) + diff);
+                        }
                         await clientDoc.save();
                     }
                 } else if (updatedDuty.mobileNumber) {

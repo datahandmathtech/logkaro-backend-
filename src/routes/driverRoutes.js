@@ -8,7 +8,8 @@ const {
     addExpense,
     recordAirCheck,
     getDriverLedger,
-    updatePassword
+    updatePassword,
+    getDriverUpcomingRides
 } = require('../controllers/driverController');
 const { protect, driver } = require('../middleware/authMiddleware');
 const { storage } = require('../config/cloudinary');
@@ -19,6 +20,7 @@ router.use(protect);
 router.use(driver);
 
 router.get('/dashboard', getDriverDashboard);
+router.get('/upcoming-rides', getDriverUpcomingRides);
 router.post('/punch-in', upload.fields([
     { name: 'selfie', maxCount: 1 },
     { name: 'kmPhoto', maxCount: 1 },
