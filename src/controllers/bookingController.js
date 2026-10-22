@@ -9,12 +9,17 @@ const Company = require('../models/Company');
 const { syncInvoiceForBooking } = require('./invoiceController');
 const asyncHandler = require('express-async-handler');
 
+// Throttle map so Booking.updateMany runs at most once every 5 minutes per company in the background
+const LAST_BOOKING_AUTO_SYNC = new Map();
+const BOOKING_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+
 // @desc    Get all bookings for a company with filters
 // @route   GET /api/bookings/:companyId
 // @access  Private/AdminOrExecutive
 const getBookings = asyncHandler(async (req, res) => {
     const { status, paymentStatus, search, startDate, endDate } = req.query;
-    let query = { company: req.params.companyId };
+    const companyId = req.params.companyId;
+    let query = { company: companyId };
 
     if (status && status !== 'All') {
         if (status === 'Completed') {
@@ -53,10 +58,12 @@ const getBookings = asyncHandler(async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    try {
-        await Booking.updateMany(
+    const lastSync = LAST_BOOKING_AUTO_SYNC.get(String(companyId)) || 0;
+    if (Date.now() - lastSync > BOOKING_SYNC_INTERVAL_MS) {
+        LAST_BOOKING_AUTO_SYNC.set(String(companyId), Date.now());
+        Booking.updateMany(
             {
-                company: req.params.companyId,
+                company: companyId,
                 bookingStatus: { $in: ['Confirmed', 'Ongoing', 'Scheduled', 'Invoiced'] },
                 $or: [
                     { travelEndDate: { $lt: today } },
@@ -67,9 +74,9 @@ const getBookings = asyncHandler(async (req, res) => {
             {
                 $set: { bookingStatus: 'Completed' }
             }
-        );
-    } catch (autoCompErr) {
-        console.error('Error auto-completing finished bookings:', autoCompErr);
+        ).catch(autoCompErr => {
+            console.error('Error auto-completing finished bookings:', autoCompErr);
+        });
     }
 
     const bookings = await Booking.find(query)
@@ -82,10 +89,17 @@ const getBookings = asyncHandler(async (req, res) => {
                 { path: 'vehicle', select: 'carNumber model type' }
             ]
         })
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean();
 
-    const sanitizedBookings = bookings.map(b => {
-        const bObj = b.toObject ? b.toObject() : b;
+    const activeStatuses = new Set(['Confirmed', 'Ongoing', 'Scheduled', 'Invoiced']);
+    const sanitizedBookings = bookings.map(bObj => {
+        if (activeStatuses.has(bObj.bookingStatus)) {
+            const endOrStart = bObj.travelEndDate ? new Date(bObj.travelEndDate) : (bObj.travelStartDate ? new Date(bObj.travelStartDate) : null);
+            if (endOrStart && endOrStart < today) {
+                bObj.bookingStatus = 'Completed';
+            }
+        }
         const fuelDed = (bObj.guestFuelFilled || Number(bObj.guestFuelAmount) > 0) ? (Number(bObj.guestFuelAmount) || 0) : 0;
         if (fuelDed > 0) {
             bObj.balanceDue = Math.max(0, (Number(bObj.totalAmount) || 0) - (Number(bObj.advancePaid) || 0) - fuelDed);
@@ -110,7 +124,8 @@ const getBookingById = asyncHandler(async (req, res) => {
                 { path: 'driver', select: 'name phone' },
                 { path: 'vehicle', select: 'carNumber model' }
             ]
-        });
+        })
+        .lean();
 
     if (!booking) {
         res.status(404);

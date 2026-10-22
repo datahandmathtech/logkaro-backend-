@@ -20,48 +20,57 @@ const getNextClientCodePreview = asyncHandler(async (req, res) => {
     res.json({ clientCode: code });
 });
 
+// Throttle map so Lead.updateMany runs at most once every 5 minutes per company in the background
+const LAST_LEAD_AUTO_SYNC = new Map();
+const LEAD_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+
 // @desc    Get all leads for a company
 // @route   GET /api/leads/:companyId
 // @access  Private/AdminOrExecutive
 const getLeads = asyncHandler(async (req, res) => {
     const { status, search, month, salesPerson, source, fy, dateType } = req.query;
+    const companyId = req.params.companyId;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Auto-move past unconfirmed leads (where tour date has ended) and cancelled leads to Lost
-    try {
-        await Lead.updateMany(
-            {
-                company: req.params.companyId,
-                status: { $nin: ['Confirmed', 'Lost'] },
-                bookingId: null,
-                notes: { $not: /Restored from Lost|Reopened to Active/i },
-                $or: [
-                    { status: 'Cancelled' },
-                    { travelEndDate: { $lt: today } },
-                    { travelEndDate: null, travelStartDate: { $lt: today } }
-                ]
-            },
-            {
-                $set: { status: 'Lost', priority: 'Lost' }
-            }
-        );
-        await Lead.updateMany(
-            {
-                company: req.params.companyId,
-                status: 'Cancelled',
-                priority: { $ne: 'Lost' }
-            },
-            {
-                $set: { status: 'Lost', priority: 'Lost' }
-            }
-        );
-    } catch (e) {
-        console.error('Error auto-moving expired/cancelled leads to Lost:', e);
+    // Throttled non-blocking background maintenance for expired/cancelled leads
+    const lastSync = LAST_LEAD_AUTO_SYNC.get(String(companyId)) || 0;
+    if (Date.now() - lastSync > LEAD_SYNC_INTERVAL_MS) {
+        LAST_LEAD_AUTO_SYNC.set(String(companyId), Date.now());
+        Promise.all([
+            Lead.updateMany(
+                {
+                    company: companyId,
+                    status: { $nin: ['Confirmed', 'Lost'] },
+                    bookingId: null,
+                    notes: { $not: /Restored from Lost|Reopened to Active/i },
+                    $or: [
+                        { status: 'Cancelled' },
+                        { travelEndDate: { $lt: today } },
+                        { travelEndDate: null, travelStartDate: { $lt: today } }
+                    ]
+                },
+                {
+                    $set: { status: 'Lost', priority: 'Lost' }
+                }
+            ),
+            Lead.updateMany(
+                {
+                    company: companyId,
+                    status: 'Cancelled',
+                    priority: { $ne: 'Lost' }
+                },
+                {
+                    $set: { status: 'Lost', priority: 'Lost' }
+                }
+            )
+        ]).catch(e => {
+            console.error('Error auto-moving expired/cancelled leads to Lost:', e);
+        });
     }
 
-    let query = { company: req.params.companyId };
+    let query = { company: companyId };
 
     if (status && status !== 'All') {
         query.status = status;
@@ -87,7 +96,23 @@ const getLeads = asyncHandler(async (req, res) => {
         ];
     }
 
-    let leads = await Lead.find(query).sort({ createdAt: -1 });
+    let leads = await Lead.find(query).sort({ createdAt: -1 }).lean();
+
+    // Instant in-memory status normalization so expired/cancelled leads reflect as Lost without waiting for DB write
+    const restoreRegex = /Restored from Lost|Reopened to Active/i;
+    for (let i = 0; i < leads.length; i++) {
+        const l = leads[i];
+        if (l.status === 'Cancelled' && l.priority !== 'Lost') {
+            l.status = 'Lost';
+            l.priority = 'Lost';
+        } else if (l.status !== 'Confirmed' && l.status !== 'Lost' && !l.bookingId && !restoreRegex.test(l.notes || '')) {
+            const endOrStart = l.travelEndDate ? new Date(l.travelEndDate) : (l.travelStartDate ? new Date(l.travelStartDate) : null);
+            if (endOrStart && endOrStart < today) {
+                l.status = 'Lost';
+                l.priority = 'Lost';
+            }
+        }
+    }
 
     // Month filter (e.g. 'Apr', 'May', '04', '05')
     if (month && month !== 'All') {
@@ -155,15 +180,16 @@ const checkDuplicatePhone = asyncHandler(async (req, res) => {
     }
 
     const cleanPhone = phone.trim();
-    const existingLeads = await Lead.find({
-        company: req.params.companyId,
-        mobileNumber: { $regex: cleanPhone }
-    }).select('leadId clientName mobileNumber status travelStartDate totalAmount createdAt').sort({ createdAt: -1 }).limit(5);
-
-    const existingBookings = await Booking.find({
-        company: req.params.companyId,
-        mobileNumber: { $regex: cleanPhone }
-    }).select('bookingId clientName mobileNumber bookingStatus travelStartDate totalAmount').sort({ createdAt: -1 }).limit(5);
+    const [existingLeads, existingBookings] = await Promise.all([
+        Lead.find({
+            company: req.params.companyId,
+            mobileNumber: { $regex: cleanPhone }
+        }).select('leadId clientName mobileNumber status travelStartDate totalAmount createdAt').sort({ createdAt: -1 }).limit(5).lean(),
+        Booking.find({
+            company: req.params.companyId,
+            mobileNumber: { $regex: cleanPhone }
+        }).select('bookingId clientName mobileNumber bookingStatus travelStartDate totalAmount').sort({ createdAt: -1 }).limit(5).lean()
+    ]);
 
     const exists = existingLeads.length > 0 || existingBookings.length > 0;
     res.json({
@@ -178,7 +204,7 @@ const checkDuplicatePhone = asyncHandler(async (req, res) => {
 // @route   GET /api/leads/single/:id
 // @access  Private/AdminOrExecutive
 const getLeadById = asyncHandler(async (req, res) => {
-    const lead = await Lead.findById(req.params.id);
+    const lead = await Lead.findById(req.params.id).lean();
     if (!lead) {
         res.status(404);
         throw new Error('Lead not found');

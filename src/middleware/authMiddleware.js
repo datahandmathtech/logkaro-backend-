@@ -1,6 +1,18 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// Fast in-memory cache for authenticated user + company (avoids 2 DB round-trips per API request)
+const USER_AUTH_CACHE = new Map();
+const USER_AUTH_TTL_MS = 60 * 1000; // 60 seconds
+
+const clearUserAuthCache = (userId = null) => {
+    if (userId) {
+        USER_AUTH_CACHE.delete(String(userId));
+    } else {
+        USER_AUTH_CACHE.clear();
+    }
+};
+
 const protect = async (req, res, next) => {
     let token;
 
@@ -10,7 +22,25 @@ const protect = async (req, res, next) => {
             const secret = process.env.JWT_SECRET || 'fleet_crm_secure_fallback_2024';
             const decoded = jwt.verify(token, secret);
 
-            req.user = await User.findById(decoded.id).select('-password').populate('company');
+            const cacheKey = String(decoded.id);
+            const cachedEntry = USER_AUTH_CACHE.get(cacheKey);
+            let baseUser = null;
+
+            // Bust cache on mutation requests so user/company updates reflect immediately
+            if (req.method !== 'GET' && req.originalUrl && (req.originalUrl.includes('/users') || req.originalUrl.includes('/company') || req.originalUrl.includes('/drivers') || req.originalUrl.includes('/executives'))) {
+                USER_AUTH_CACHE.delete(cacheKey);
+            } else if (cachedEntry && (Date.now() - cachedEntry.time < USER_AUTH_TTL_MS)) {
+                baseUser = cachedEntry.user;
+            }
+
+            if (!baseUser) {
+                baseUser = await User.findById(decoded.id).select('-password -documents').populate('company').lean();
+                if (baseUser) {
+                    USER_AUTH_CACHE.set(cacheKey, { user: baseUser, time: Date.now() });
+                }
+            }
+
+            req.user = baseUser ? { ...baseUser } : null;
             
             // 🛡️ TRANSFER PROXY STATUS FROM JWT TO USER OBJECT
             if (decoded.isSuperAdminProxy && req.user) {

@@ -74,7 +74,8 @@ const getDRSDuties = asyncHandler(async (req, res) => {
         .populate('vehicle', 'carNumber model type brand')
         .populate('leadId', 'clientName leadId status totalAmount')
         .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid guestFuelFilled guestFuelAmount balanceDue bookingStatus paymentStatus travelStartDate travelEndDate itinerary vehicleType client')
-        .sort({ date: 1, time: 1 });
+        .sort({ date: 1, time: 1 })
+        .lean();
         
     res.json(duties);
 });

@@ -10,7 +10,7 @@ const LedgerEntry = require('../models/LedgerEntry');
 // @access  Private
 const getBankAccounts = asyncHandler(async (req, res) => {
     const { companyId } = req.params;
-    const accounts = await BankAccount.find({ company: companyId, isActive: { $ne: false } }).sort({ createdAt: 1 });
+    const accounts = await BankAccount.find({ company: companyId, isActive: { $ne: false } }).sort({ createdAt: 1 }).lean();
     res.json(accounts);
 });
 
@@ -120,12 +120,21 @@ const getBankTransactions = asyncHandler(async (req, res) => {
         ];
     }
 
-    const transactions = await BankTransaction.find(query)
-        .populate('bankAccount', 'bankName accountNumber')
-        .populate('bookingRef', 'bookingId clientCode clientName')
-        .populate('clientRef', 'name mobile')
-        .populate('createdBy', 'name')
-        .sort({ date: -1, createdAt: -1 });
+    let bankAccountsQuery = { company: companyId, isActive: true };
+    if (bankAccountId && bankAccountId !== 'all') {
+        bankAccountsQuery._id = bankAccountId;
+    }
+
+    const [transactions, accounts] = await Promise.all([
+        BankTransaction.find(query)
+            .populate('bankAccount', 'bankName accountNumber')
+            .populate('bookingRef', 'bookingId clientCode clientName')
+            .populate('clientRef', 'name mobile')
+            .populate('createdBy', 'name')
+            .sort({ date: -1, createdAt: -1 })
+            .lean(),
+        BankAccount.find(bankAccountsQuery).lean()
+    ]);
 
     // Compute stats
     let totalIn = 0;
@@ -135,12 +144,6 @@ const getBankTransactions = asyncHandler(async (req, res) => {
         else if (tx.type === 'OUT') totalOut += tx.amount;
     }
 
-    // Overall bank balance (either specific bank or sum of all banks)
-    let bankAccountsQuery = { company: companyId, isActive: true };
-    if (bankAccountId && bankAccountId !== 'all') {
-        bankAccountsQuery._id = bankAccountId;
-    }
-    const accounts = await BankAccount.find(bankAccountsQuery);
     const overallBalance = accounts.reduce((acc, a) => acc + (a.currentBalance || 0), 0);
 
     res.json({

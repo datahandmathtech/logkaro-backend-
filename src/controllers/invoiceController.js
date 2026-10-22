@@ -29,15 +29,19 @@ const resequenceCompanyInvoices = async (companyId) => {
         }
 
         // Pass 1: Assign temporary numbers to avoid MongoDB unique index conflict
+        let anyChanged = false;
         for (let i = 0; i < allInvoices.length; i++) {
             const inv = allInvoices[i];
             const targetSeq = minSeq + i;
             const year = inv.invoiceDate ? new Date(inv.invoiceDate).getFullYear() : new Date().getFullYear();
             const formattedSeq = `LK-INV-${year}-${String(targetSeq).padStart(5, '0')}`;
             if (inv.invoiceNumber !== formattedSeq) {
+                anyChanged = true;
                 await Invoice.findByIdAndUpdate(inv._id, { invoiceNumber: `LK-TEMP-${inv._id}` });
             }
         }
+
+        if (!anyChanged) return;
 
         // Pass 2: Assign final formatted numbers
         for (let i = 0; i < allInvoices.length; i++) {
@@ -428,12 +432,10 @@ const getInvoices = asyncHandler(async (req, res) => {
     const { status, search, startDate, endDate, page = 1, limit = 500 } = req.query;
     const companyId = req.params.companyId || req.user?.company;
 
-    // Ensure invoices are sequenced strictly chronologically by invoiceDate
-    try {
-        await resequenceCompanyInvoices(companyId);
-    } catch (reseqErr) {
+    // Non-blocking background check so GET response is never delayed
+    resequenceCompanyInvoices(companyId).catch((reseqErr) => {
         console.error('Error re-sequencing invoices in getInvoices:', reseqErr);
-    }
+    });
 
     const query = { company: companyId };
 
@@ -462,18 +464,21 @@ const getInvoices = asyncHandler(async (req, res) => {
         }
     }
 
-    const invoices = await Invoice.find(query)
-        .populate('booking', 'bookingId clientCode travelStartDate travelEndDate vehicleType clientName mobileNumber totalAmount advancePaid balanceDue gstMode gstRate')
-        .populate('client', 'name mobile balance')
-        .populate('company', 'name gstNumber logoUrl ownerName whatsappNumber')
-        .sort({ invoiceDate: -1, invoiceNumber: -1, createdAt: -1 })
-        .limit(Number(limit))
-        .skip((Number(page) - 1) * Number(limit));
+    const [invoices, total, allMatching] = await Promise.all([
+        Invoice.find(query)
+            .populate('booking', 'bookingId clientCode travelStartDate travelEndDate vehicleType clientName mobileNumber totalAmount advancePaid balanceDue gstMode gstRate')
+            .populate('client', 'name mobile balance')
+            .populate('company', 'name gstNumber logoUrl ownerName whatsappNumber')
+            .sort({ invoiceDate: -1, invoiceNumber: -1, createdAt: -1 })
+            .limit(Number(limit))
+            .skip((Number(page) - 1) * Number(limit))
+            .lean(),
+        Invoice.countDocuments(query),
+        Invoice.find({ company: companyId })
+            .select('status totalAmount advanceAdjusted netPayable totalTaxAmount')
+            .lean()
+    ]);
 
-    const total = await Invoice.countDocuments(query);
-
-    // Compute summary KPIs
-    const allMatching = await Invoice.find({ company: companyId });
     const kpiSummary = {
         totalInvoices: allMatching.length,
         totalInvoicedAmount: allMatching.reduce((acc, inv) => acc + (inv.status !== 'Cancelled' ? inv.totalAmount : 0), 0),
@@ -505,7 +510,8 @@ const getInvoiceById = asyncHandler(async (req, res) => {
     const invoice = await Invoice.findById(req.params.id)
         .populate('company')
         .populate('booking')
-        .populate('client');
+        .populate('client')
+        .lean();
 
     if (!invoice) {
         res.status(404);

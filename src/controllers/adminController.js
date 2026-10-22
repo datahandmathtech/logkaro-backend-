@@ -784,13 +784,13 @@ const getAllDrivers = asyncHandler(async (req, res) => {
         }
 
         // 1. Calculate Global Stats for the company
-        const allDrivers = await User.find(driverQuery).select('_id status isFreelancer');
+        const allDrivers = await User.find(driverQuery).select('_id status isFreelancer').lean();
         const allDriverIds = allDrivers.map(d => d._id);
         const todayStr = new Date().toLocaleDateString('en-CA');
 
         const [activeAt, completedToday] = await Promise.all([
-            Attendance.find({ driver: { $in: allDriverIds }, status: 'incomplete' }).populate('vehicle', 'carNumber model').select('driver vehicle'),
-            Attendance.find({ driver: { $in: allDriverIds }, status: 'completed', date: todayStr }).select('driver')
+            Attendance.find({ driver: { $in: allDriverIds }, status: 'incomplete' }).populate('vehicle', 'carNumber model').select('driver vehicle').lean(),
+            Attendance.find({ driver: { $in: allDriverIds }, status: 'completed', date: todayStr }).select('driver').lean()
         ]);
 
         const activeAtSet = new Set(activeAt.map(a => a.driver?.toString()));
@@ -809,7 +809,7 @@ const getAllDrivers = asyncHandler(async (req, res) => {
             if (paginated) {
                 mongoQuery = mongoQuery.limit(pageSize).skip(pageSize * (page - 1));
             }
-            let drivers = await mongoQuery.sort({ createdAt: -1 });
+            let drivers = await mongoQuery.sort({ createdAt: -1 }).lean();
 
             // Apply 30-day freelancer filter ONLY if includeAll is not true
             if (req.query.includeAll !== 'true') {
@@ -904,8 +904,10 @@ const getAllDrivers = asyncHandler(async (req, res) => {
             return res.json({ drivers, stats });
         }
 
-        const count = await User.countDocuments(driverQuery);
-        const driversList = await fetchDriversList(driverQuery, true);
+        const [count, driversList] = await Promise.all([
+            User.countDocuments(driverQuery),
+            fetchDriversList(driverQuery, true)
+        ]);
 
         res.json({ drivers: driversList, page, pages: Math.ceil(count / pageSize), total: count, stats });
     } catch (error) {
@@ -957,7 +959,8 @@ const getAllVehicles = asyncHandler(async (req, res) => {
 
         let vehicles = await Vehicle.find(mergedQuery)
             .populate('currentDriver', 'name mobile isFreelancer')
-            .sort({ carNumber: 1 });
+            .sort({ carNumber: 1 })
+            .lean();
 
         if (isBackMonth && req.query.includeBlocked !== 'true') {
             const startOfMonth = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1);

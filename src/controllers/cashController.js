@@ -48,12 +48,38 @@ const getCashTransactions = asyncHandler(async (req, res) => {
         ];
     }
 
-    const transactions = await CashTransaction.find(query)
-        .populate('bankAccount', 'bankName accountNumber')
-        .populate('bookingRef', 'bookingId clientCode clientName')
-        .populate('driverRef', 'name mobile')
-        .populate('createdBy', 'name')
-        .sort({ date: -1, createdAt: -1 });
+    const priorPromise = (startOfPeriod && mongoose.Types.ObjectId.isValid(companyId))
+        ? CashTransaction.aggregate([
+            {
+                $match: {
+                    company: new mongoose.Types.ObjectId(companyId),
+                    date: { $lt: startOfPeriod }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalIn: { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$amount', 0] } },
+                    totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$amount', 0] } }
+                }
+            }
+        ]).catch(priorErr => {
+            console.error('Error calculating prior cash balance:', priorErr);
+            return [];
+        })
+        : Promise.resolve([]);
+
+    const [transactions, priorAgg, company] = await Promise.all([
+        CashTransaction.find(query)
+            .populate('bankAccount', 'bankName accountNumber')
+            .populate('bookingRef', 'bookingId clientCode clientName')
+            .populate('driverRef', 'name mobile')
+            .populate('createdBy', 'name')
+            .sort({ date: -1, createdAt: -1 })
+            .lean(),
+        priorPromise,
+        Company.findById(companyId)
+    ]);
 
     let totalIn = 0;
     let totalOut = 0;
@@ -64,44 +90,27 @@ const getCashTransactions = asyncHandler(async (req, res) => {
 
     // Opening & Closing Balance for queried period
     let openingBalance = 0;
-    if (startOfPeriod && mongoose.Types.ObjectId.isValid(companyId)) {
-        try {
-            const priorAgg = await CashTransaction.aggregate([
-                {
-                    $match: {
-                        company: new mongoose.Types.ObjectId(companyId),
-                        date: { $lt: startOfPeriod }
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        totalIn: { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$amount', 0] } },
-                        totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$amount', 0] } }
-                    }
-                }
-            ]);
-            if (priorAgg.length > 0) {
-                openingBalance = (priorAgg[0].totalIn || 0) - (priorAgg[0].totalOut || 0);
-            }
-        } catch (priorErr) {
-            console.error('Error calculating prior cash balance:', priorErr);
-        }
+    if (priorAgg && priorAgg.length > 0) {
+        openingBalance = (priorAgg[0].totalIn || 0) - (priorAgg[0].totalOut || 0);
     }
     const closingBalance = openingBalance + totalIn - totalOut;
 
     // Company current cash in hand balance
-    const company = await Company.findById(companyId);
     let cashBalance = company?.cashBalance ?? 0;
 
     // If cash balance is 0 or uninitialized, calculate from historical sum
-    if (cashBalance === 0) {
-        const allTx = await CashTransaction.find({ company: companyId });
-        let computed = 0;
-        for (const t of allTx) {
-            if (t.type === 'IN') computed += t.amount;
-            else if (t.type === 'OUT') computed -= t.amount;
-        }
+    if (cashBalance === 0 && mongoose.Types.ObjectId.isValid(companyId)) {
+        const allAgg = await CashTransaction.aggregate([
+            { $match: { company: new mongoose.Types.ObjectId(companyId) } },
+            {
+                $group: {
+                    _id: null,
+                    totalIn: { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$amount', 0] } },
+                    totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$amount', 0] } }
+                }
+            }
+        ]);
+        const computed = allAgg.length > 0 ? ((allAgg[0].totalIn || 0) - (allAgg[0].totalOut || 0)) : 0;
         if (computed !== 0 && company) {
             company.cashBalance = computed;
             await company.save();

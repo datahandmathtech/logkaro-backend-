@@ -54,64 +54,66 @@ const getClients = asyncHandler(async (req, res) => {
         filter.clientType = { $ne: 'Travel Agent' };
     }
 
-    const clients = await Client.find(filter).sort({ updatedAt: -1 }).lean();
     const dateRange = getPeriodDateRange(year, month);
 
     if (dateRange) {
-        // Compute period figures
-        const fyLedgers = await LedgerEntry.aggregate([
-            {
-                $match: {
-                    company: new mongoose.Types.ObjectId(companyId),
-                    date: { $gte: dateRange.start, $lte: dateRange.end }
-                }
-            },
-            {
-                $group: {
-                    _id: '$client',
-                    fyBilled: {
-                        $sum: {
-                            $cond: [{ $eq: ['$type', 'Bill'] }, '$amount', 0]
-                        }
-                    },
-                    fyPaid: {
-                        $sum: {
-                            $cond: [{ $in: ['$type', ['Payment', 'Advance', 'Fuel']] }, '$amount', 0]
-                        }
-                    },
-                    fyTripsCount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$type', 'Bill'] }, 1, 0]
-                        }
-                    }
-                }
-            }
-        ]);
-
-        // Also compute full FY Annual Turnover for Diwali gift tier
         const fullFYRange = getPeriodDateRange(year, 'All Months');
-        const annualFYLedgers = await LedgerEntry.aggregate([
-            {
-                $match: {
-                    company: new mongoose.Types.ObjectId(companyId),
-                    date: { $gte: fullFYRange.start, $lte: fullFYRange.end }
-                }
-            },
-            {
-                $group: {
-                    _id: '$client',
-                    annualBilled: {
-                        $sum: {
-                            $cond: [{ $eq: ['$type', 'Bill'] }, '$amount', 0]
-                        }
-                    },
-                    annualTripsCount: {
-                        $sum: {
-                            $cond: [{ $eq: ['$type', 'Bill'] }, 1, 0]
+        const companyObjId = new mongoose.Types.ObjectId(companyId);
+
+        // Run client query and both ledger aggregations concurrently
+        const [clients, fyLedgers, annualFYLedgers] = await Promise.all([
+            Client.find(filter).sort({ updatedAt: -1 }).lean(),
+            LedgerEntry.aggregate([
+                {
+                    $match: {
+                        company: companyObjId,
+                        date: { $gte: dateRange.start, $lte: dateRange.end }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$client',
+                        fyBilled: {
+                            $sum: {
+                                $cond: [{ $eq: ['$type', 'Bill'] }, '$amount', 0]
+                            }
+                        },
+                        fyPaid: {
+                            $sum: {
+                                $cond: [{ $in: ['$type', ['Payment', 'Advance', 'Fuel']] }, '$amount', 0]
+                            }
+                        },
+                        fyTripsCount: {
+                            $sum: {
+                                $cond: [{ $eq: ['$type', 'Bill'] }, 1, 0]
+                            }
                         }
                     }
                 }
-            }
+            ]),
+            LedgerEntry.aggregate([
+                {
+                    $match: {
+                        company: companyObjId,
+                        date: { $gte: fullFYRange.start, $lte: fullFYRange.end }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$client',
+                        annualBilled: {
+                            $sum: {
+                                $cond: [{ $eq: ['$type', 'Bill'] }, '$amount', 0]
+                            }
+                        },
+                        annualTripsCount: {
+                            $sum: {
+                                $cond: [{ $eq: ['$type', 'Bill'] }, 1, 0]
+                            }
+                        }
+                    }
+                }
+            ])
         ]);
 
         const fyMap = new Map();
@@ -159,19 +161,22 @@ const getClients = asyncHandler(async (req, res) => {
 
         return res.json(enhancedClients);
     } else {
-        const tripCounts = await LedgerEntry.aggregate([
-            {
-                $match: {
-                    company: new mongoose.Types.ObjectId(companyId),
-                    type: 'Bill'
+        const [clients, tripCounts] = await Promise.all([
+            Client.find(filter).sort({ updatedAt: -1 }).lean(),
+            LedgerEntry.aggregate([
+                {
+                    $match: {
+                        company: new mongoose.Types.ObjectId(companyId),
+                        type: 'Bill'
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$client',
+                        totalTripsCount: { $sum: 1 }
+                    }
                 }
-            },
-            {
-                $group: {
-                    _id: '$client',
-                    totalTripsCount: { $sum: 1 }
-                }
-            }
+            ])
         ]);
         const tripMap = new Map();
         tripCounts.forEach(t => {
