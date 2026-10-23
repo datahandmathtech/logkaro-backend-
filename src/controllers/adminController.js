@@ -5044,6 +5044,17 @@ const updateAdvance = asyncHandler(async (req, res) => {
         const MONTH_MAP = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const monthLabel = MONTH_MAP[(updatedAdvance.month || 1) - 1] || updatedAdvance.month;
 
+        let recipientName = '';
+        const recipientRefId = updatedAdvance.driver || updatedAdvance.staff || null;
+        try {
+            if (recipientRefId) {
+                const recipientUser = await User.findById(recipientRefId).select('name').lean();
+                recipientName = recipientUser?.name || '';
+            }
+        } catch (popErr) {
+            console.error('Advance recipient lookup failed:', popErr.message);
+        }
+
         await updateFinancialTransaction({
             companyId: updatedAdvance.company,
             sourceId: updatedAdvance._id,
@@ -5054,8 +5065,8 @@ const updateAdvance = asyncHandler(async (req, res) => {
             bankAccountId: updatedAdvance.paidBy === 'Company' ? updatedAdvance.bankAccount : null,
             type: 'OUT',
             category: isStaff ? 'Staff Advance' : 'Driver Advance',
-            description: `Advance given to ${isStaff ? 'Staff' : 'Driver'} (${monthLabel} ${updatedAdvance.year || ''} Hisab) - ${updatedAdvance.remark || ''}`,
-            driverRef: updatedAdvance.driver || updatedAdvance.staff || null,
+            description: `Advance given to ${isStaff ? 'Staff' : 'Driver'}${recipientName ? ` ${recipientName}` : ''} (${monthLabel} ${updatedAdvance.year || ''} Hisab) - ${updatedAdvance.remark || ''}`,
+            driverRef: recipientRefId,
             reference: updatedAdvance.paymentReference || '',
             user: req.user?._id,
             paidBy: updatedAdvance.paidBy || 'Company'

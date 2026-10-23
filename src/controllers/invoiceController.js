@@ -296,8 +296,10 @@ const createInvoice = asyncHandler(async (req, res) => {
 });
 
 // Helper: Automatically create or update a Paid Tax Invoice when a booking's payment is settled (balanceDue <= 0)
-const syncInvoiceForBooking = async (booking) => {
+// opts.force = true -> generate an invoice even if balance is still pending (status 'Issued')
+const syncInvoiceForBooking = async (booking, opts = {}) => {
     try {
+        const force = Boolean(opts.force);
         if (!booking || booking.bookingStatus === 'Cancelled') return null;
         const pkgAmt = round2(Number(booking.totalAmount || booking.packagePrice) || 0);
         if (pkgAmt <= 0) return null;
@@ -307,8 +309,9 @@ const syncInvoiceForBooking = async (booking) => {
             ? Math.max(0, round2(Number(booking.balanceDue)))
             : Math.max(0, round2(pkgAmt - advAmt));
 
+        const isSettled = !(balAmt > 0 && booking.paymentStatus !== 'Full Received' && advAmt < pkgAmt);
         // Only auto-sync into Tax Invoices when payment is settled (balance is 0)
-        if (balAmt > 0 && booking.paymentStatus !== 'Full Received' && advAmt < pkgAmt) {
+        if (!isSettled && !force) {
             return null;
         }
 
@@ -343,6 +346,11 @@ const syncInvoiceForBooking = async (booking) => {
         const cgstAmount = totalTaxAmount > 0 ? round2(totalTaxAmount / 2) : 0;
         const sgstAmount = totalTaxAmount > 0 ? round2(totalTaxAmount - cgstAmount) : 0;
 
+        if (existingInvoice && !isSettled) {
+            // Forced generation for an unpaid booking: invoice already exists, keep it as-is
+            return existingInvoice;
+        }
+
         if (existingInvoice) {
             existingInvoice.booking = booking._id;
             if (displayCode) existingInvoice.bookingId = displayCode;
@@ -364,6 +372,8 @@ const syncInvoiceForBooking = async (booking) => {
 
         const invoiceNumber = await getNextSequence('LK-INV');
         const invDate = booking.travelEndDate || booking.travelStartDate || new Date();
+        const pendingAmt = isSettled ? 0 : Math.min(totalAmount, balAmt);
+        const adjustedAmt = round2(totalAmount - pendingAmt);
 
         const newInvoice = await Invoice.create({
             invoiceNumber,
@@ -406,10 +416,12 @@ const syncInvoiceForBooking = async (booking) => {
             igstAmount: 0,
             totalTaxAmount,
             totalAmount,
-            advanceAdjusted: totalAmount,
-            netPayable: 0,
-            status: 'Paid',
-            notes: `Auto-generated Tax Invoice on full payment settlement for booking ${displayCode}`
+            advanceAdjusted: adjustedAmt,
+            netPayable: round2(pendingAmt),
+            status: isSettled ? 'Paid' : 'Issued',
+            notes: isSettled
+                ? `Auto-generated Tax Invoice on full payment settlement for booking ${displayCode}`
+                : `Tax Invoice generated for booking ${displayCode}`
         });
 
         await Booking.findByIdAndUpdate(booking._id, {
@@ -424,6 +436,31 @@ const syncInvoiceForBooking = async (booking) => {
         return null;
     }
 };
+
+// @desc    Generate (or fetch existing) Tax Invoice for a booking
+// @route   POST /api/invoices/from-booking/:bookingId
+// @access  Private/AdminOrExecutive
+const generateInvoiceFromBooking = asyncHandler(async (req, res) => {
+    const booking = await Booking.findById(req.params.bookingId);
+    if (!booking) {
+        res.status(404);
+        throw new Error('Booking not found');
+    }
+    if (booking.bookingStatus === 'Cancelled') {
+        res.status(400);
+        throw new Error('Cannot generate invoice for a cancelled booking');
+    }
+    if (!(Number(booking.totalAmount || booking.packagePrice) > 0)) {
+        res.status(400);
+        throw new Error('Booking package amount is 0. Please update the package price first.');
+    }
+    const invoice = await syncInvoiceForBooking(booking, { force: true });
+    if (!invoice) {
+        res.status(500);
+        throw new Error('Failed to generate invoice');
+    }
+    res.status(201).json(invoice);
+});
 
 // @desc    Get all invoices for a company
 // @route   GET /api/invoices/:companyId
@@ -623,10 +660,47 @@ const updateInvoice = asyncHandler(async (req, res) => {
         throw new Error('Invoice not found');
     }
     
-    if (req.body.billTo) invoice.billTo = req.body.billTo;
-    if (req.body.gstMode) invoice.gstMode = req.body.gstMode;
+    if (req.body.billTo) invoice.billTo = { ...(invoice.billTo?.toObject ? invoice.billTo.toObject() : invoice.billTo), ...req.body.billTo };
     if (req.body.invoiceDate) invoice.invoiceDate = new Date(req.body.invoiceDate);
-    // can expand fields if needed
+    if (req.body.notes !== undefined) invoice.notes = req.body.notes;
+
+    const gstChanged = (req.body.gstMode && req.body.gstMode !== invoice.gstMode) ||
+        (req.body.gstRate !== undefined && Number(req.body.gstRate) !== Number(invoice.gstRate));
+    if (req.body.gstMode) invoice.gstMode = req.body.gstMode;
+    if (req.body.gstRate !== undefined) invoice.gstRate = Number(req.body.gstRate) || 0;
+
+    if (gstChanged) {
+        const base = round2((invoice.items || []).reduce((s, it) => s + (Number(it.amount) || 0), 0) || Number(invoice.taxableAmount) || 0);
+        const rateNum = Number(invoice.gstRate) || 0;
+        let taxableAmount = base, totalTaxAmount = 0, totalAmount = base;
+        if (invoice.gstMode === 'GST Extra') {
+            totalTaxAmount = round2((base * rateNum) / 100);
+            totalAmount = round2(base + totalTaxAmount);
+        } else if (invoice.gstMode === 'GST Inclusive') {
+            taxableAmount = round2(base / (1 + rateNum / 100));
+            totalTaxAmount = round2(base - taxableAmount);
+        }
+        invoice.taxableAmount = taxableAmount;
+        invoice.totalTaxAmount = totalTaxAmount;
+        invoice.totalAmount = totalAmount;
+        if (invoice.isInterState) {
+            invoice.igstRate = totalTaxAmount > 0 ? rateNum : 0;
+            invoice.igstAmount = totalTaxAmount;
+            invoice.cgstRate = invoice.sgstRate = invoice.cgstAmount = invoice.sgstAmount = 0;
+        } else {
+            invoice.cgstRate = totalTaxAmount > 0 ? round2(rateNum / 2) : 0;
+            invoice.sgstRate = invoice.cgstRate;
+            invoice.cgstAmount = totalTaxAmount > 0 ? round2(totalTaxAmount / 2) : 0;
+            invoice.sgstAmount = round2(totalTaxAmount - invoice.cgstAmount);
+            invoice.igstRate = invoice.igstAmount = 0;
+        }
+        if (invoice.status === 'Paid') {
+            invoice.advanceAdjusted = totalAmount;
+            invoice.netPayable = 0;
+        } else {
+            invoice.netPayable = Math.max(0, round2(totalAmount - (Number(invoice.advanceAdjusted) || 0)));
+        }
+    }
     
     await invoice.save();
     await resequenceCompanyInvoices(invoice.company);
@@ -641,5 +715,6 @@ module.exports = {
     getInvoiceById,
     updateInvoiceStatus,
     deleteInvoice,
-    syncInvoiceForBooking
+    syncInvoiceForBooking,
+    generateInvoiceFromBooking
 };

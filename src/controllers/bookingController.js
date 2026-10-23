@@ -195,6 +195,33 @@ const updateBooking = asyncHandler(async (req, res) => {
     if (alternateMobile !== undefined) booking.alternateMobile = alternateMobile;
     if (email !== undefined) booking.email = email;
     if (gstin !== undefined) booking.gstin = gstin;
+    if (req.body.bankName !== undefined) booking.bankName = req.body.bankName;
+    if (req.body.advanceDate) booking.advanceDate = new Date(req.body.advanceDate);
+    if (req.body.advanceBankAccountId || req.body.advanceDate) {
+        try {
+            const BankTransaction = require('../models/BankTransaction');
+            const BankAccount = require('../models/BankAccount');
+            const advTx = await BankTransaction.findOne({
+                bookingRef: booking._id,
+                description: { $regex: /^Advance/i }
+            }).sort({ date: 1 });
+            if (advTx) {
+                const oldAcc = advTx.bankAccount ? String(advTx.bankAccount) : '';
+                const newAcc = req.body.advanceBankAccountId ? String(req.body.advanceBankAccountId) : oldAcc;
+                if (req.body.advanceDate) advTx.date = new Date(req.body.advanceDate);
+                if (newAcc && newAcc !== oldAcc) {
+                    advTx.bankAccount = newAcc;
+                    if (req.body.bankName) advTx.bankName = req.body.bankName;
+                    const amt = Number(advTx.amount) || 0;
+                    if (oldAcc) await BankAccount.findByIdAndUpdate(oldAcc, { $inc: { currentBalance: -amt } });
+                    await BankAccount.findByIdAndUpdate(newAcc, { $inc: { currentBalance: amt } });
+                }
+                await advTx.save();
+            }
+        } catch (advTxErr) {
+            console.error('Error moving advance bank transaction:', advTxErr);
+        }
+    }
 
     // Sales Info fields
     if (source !== undefined) booking.source = source;
@@ -568,7 +595,8 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
     }
 
     booking.advancePaid += paymentAmount;
-    booking.balanceDue = Math.max(0, booking.totalAmount - booking.advancePaid);
+    const payFuelDed = (booking.guestFuelFilled || Number(booking.guestFuelAmount) > 0) ? (Number(booking.guestFuelAmount) || 0) : 0;
+    booking.balanceDue = Math.max(0, booking.totalAmount - booking.advancePaid - payFuelDed);
 
     if (booking.balanceDue <= 0) {
         booking.paymentStatus = 'Full Received';

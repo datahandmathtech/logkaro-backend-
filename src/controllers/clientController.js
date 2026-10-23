@@ -607,24 +607,51 @@ const updateLedgerEntry = asyncHandler(async (req, res) => {
                 if (!bankTx && booking) {
                     bankTx = await BankTransaction.findOne({
                         bookingRef: booking._id,
-                        amount: oldAmount
+                        amount: oldAmount,
+                        type: 'IN',
+                        $or: [{ sourceId: null }, { sourceId: { $exists: false } }]
                     });
                 }
-                if (!bankTx && booking) {
-                    bankTx = await BankTransaction.findOne({
-                        bookingRef: booking._id
-                    }).sort({ date: -1 });
-                }
                 if (bankTx) {
+                    const oldBankAccountId = bankTx.bankAccount ? String(bankTx.bankAccount) : '';
                     bankTx.amount = newAmount;
                     if (date) bankTx.date = parsedDate;
                     if (bankName) bankTx.bankName = bankName;
                     if (bankAccountId) bankTx.bankAccount = bankAccountId;
                     if (paymentMode) bankTx.paymentMode = paymentMode;
                     if (reference) bankTx.reference = reference;
+                    if (!bankTx.sourceId) bankTx.sourceId = entry._id;
                     await bankTx.save();
-                    if (diff !== 0) {
+                    const newBankAccountId = bankTx.bankAccount ? String(bankTx.bankAccount) : '';
+                    if (oldBankAccountId && newBankAccountId && oldBankAccountId !== newBankAccountId) {
+                        // Bank changed: move full amount from old account to new account
+                        await BankAccount.findByIdAndUpdate(oldBankAccountId, { $inc: { currentBalance: -oldAmount } });
+                        await BankAccount.findByIdAndUpdate(newBankAccountId, { $inc: { currentBalance: newAmount } });
+                    } else if (diff !== 0) {
                         await BankAccount.findByIdAndUpdate(bankTx.bankAccount, { $inc: { currentBalance: diff } });
+                    }
+                } else if (bankAccountId && (entry.type === 'Advance' || entry.type === 'Payment')) {
+                    // Payment had no Bank Book entry yet -> create it (back-dated to the payment date)
+                    const acc = await BankAccount.findById(bankAccountId).select('company bankName').lean();
+                    if (acc) {
+                        await BankTransaction.create({
+                            company: acc.company || entry.company,
+                            bankAccount: bankAccountId,
+                            bankName: bankName || acc.bankName || '',
+                            type: 'IN',
+                            amount: newAmount,
+                            category: entry.type === 'Advance' ? 'Booking Advance' : 'Booking Payment',
+                            paymentMode: paymentMode || 'UPI / QR Code',
+                            reference: reference || '',
+                            description: `${entry.type === 'Advance' ? 'Advance' : 'Payment'} Received${booking?.clientName ? ` - ${booking.clientName}` : ''}`,
+                            bookingRef: booking?._id || null,
+                            clientRef: entry.client || null,
+                            date: parsedDate || new Date(),
+                            sourceId: entry._id,
+                            sourceType: 'LedgerEntry',
+                            createdBy: req.user?._id || null
+                        });
+                        await BankAccount.findByIdAndUpdate(bankAccountId, { $inc: { currentBalance: newAmount } });
                     }
                 }
             }

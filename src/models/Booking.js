@@ -195,7 +195,7 @@ const bookingSchema = new mongoose.Schema({
     },
     paymentStatus: {
         type: String,
-        enum: ['No Advance', 'Advance Received', 'Partial', 'Full Received', 'Refund Due', 'Settled'],
+        enum: ['No Advance', 'Pending', 'Advance Received', 'Partial', 'Full Received', 'Refund Due', 'Settled'],
         default: 'Advance Received'
     },
     paymentMode: {
@@ -236,5 +236,27 @@ const bookingSchema = new mongoose.Schema({
 
 bookingSchema.index({ company: 1, bookingDate: -1 });
 bookingSchema.index({ company: 1, bookingStatus: 1 });
+
+// Safety net: guest-paid fuel always reduces the balance, even if a controller
+// recomputed balanceDue as (total - advance) only. Never raises the balance.
+bookingSchema.pre('save', function (next) {
+    try {
+        const fuelDed = (this.guestFuelFilled || Number(this.guestFuelAmount) > 0) ? (Number(this.guestFuelAmount) || 0) : 0;
+        if (fuelDed > 0) {
+            const total = Number(this.totalAmount || this.packagePrice) || 0;
+            const fuelAdjusted = Math.max(0, total - (Number(this.advancePaid) || 0) - fuelDed);
+            const current = this.balanceDue === undefined || this.balanceDue === null ? Infinity : Number(this.balanceDue);
+            if (fuelAdjusted < current) {
+                this.balanceDue = fuelAdjusted;
+            }
+            if (total > 0 && this.balanceDue <= 0 && this.paymentStatus !== 'Refund Due' && this.paymentStatus !== 'Settled') {
+                this.paymentStatus = 'Full Received';
+            }
+        }
+    } catch (e) {
+        // never block a save because of this
+    }
+    next();
+});
 
 module.exports = mongoose.model('Booking', bookingSchema);

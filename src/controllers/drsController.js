@@ -338,6 +338,58 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     const oldClientName = duty.clientName;
     const oldMobile = duty.mobileNumber;
 
+    // ---------------------------------------------------------------
+    // GUARD: For duties linked to a main Booking, guest name and
+    // check-out (trip end) must be changed from main Bookings only.
+    // ---------------------------------------------------------------
+    {
+        let linkedBkg = null;
+        if (duty.bookingRef) {
+            linkedBkg = await Booking.findById(duty.bookingRef).select('clientName travelStartDate travelEndDate bookingId clientCode').lean();
+        }
+        if (!linkedBkg && duty.bookingId && duty.bookingId !== 'DIRECT' && duty.bookingId !== 'N/A') {
+            linkedBkg = await Booking.findOne({ company: duty.company, $or: [{ bookingId: duty.bookingId }, { clientCode: duty.bookingId }] })
+                .select('clientName travelStartDate travelEndDate bookingId clientCode').lean();
+        }
+        if (linkedBkg) {
+            const bkgCode = linkedBkg.clientCode || linkedBkg.bookingId || '';
+            if (req.body.clientName !== undefined) {
+                const newName = String(req.body.clientName || '').trim().toLowerCase();
+                const curName = String(duty.clientName || '').trim().toLowerCase();
+                if (newName && newName !== curName) {
+                    res.status(400);
+                    throw new Error(`Guest name cannot be changed from Live DRS. Please update it from main Bookings (${bkgCode} → Edit Booking).`);
+                }
+            }
+            if (req.body.date !== undefined && req.body.date) {
+                const toIST = (v) => {
+                    const d = new Date(v);
+                    if (isNaN(d.getTime())) return '';
+                    return new Date(d.getTime() + 5.5 * 3600000).toISOString().slice(0, 10);
+                };
+                const newDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.date)) ? String(req.body.date) : toIST(req.body.date);
+                const curDateStr = duty.date ? toIST(duty.date) : '';
+                const startStr = linkedBkg.travelStartDate ? toIST(linkedBkg.travelStartDate) : '';
+                const endStr = linkedBkg.travelEndDate ? toIST(linkedBkg.travelEndDate) : '';
+                if (newDateStr && newDateStr !== curDateStr && ((endStr && newDateStr > endStr) || (startStr && newDateStr < startStr))) {
+                    res.status(400);
+                    throw new Error(`Check-out / trip dates cannot be changed from Live DRS (booking ${bkgCode} is ${startStr} to ${endStr}). Please update from main Bookings.`);
+                }
+            }
+            if (req.body.cOut !== undefined && req.body.cOut !== null && String(req.body.cOut).trim() !== '' && linkedBkg.travelEndDate) {
+                const endD = new Date(new Date(linkedBkg.travelEndDate).getTime() + 5.5 * 3600000);
+                const endDDMM = `${String(endD.getUTCDate()).padStart(2, '0')}-${String(endD.getUTCMonth() + 1).padStart(2, '0')}`;
+                const norm = (s) => String(s).trim().replace(/[./]/g, '-').split('-').slice(0, 2).map(p => p.padStart(2, '0')).join('-');
+                const newCOut = norm(req.body.cOut);
+                const curCOut = duty.cOut ? norm(duty.cOut) : endDDMM;
+                if (newCOut !== curCOut && newCOut !== endDDMM) {
+                    res.status(400);
+                    throw new Error(`Check-out (C/Out ${endDDMM}) cannot be changed from Live DRS. Please update the trip end date from main Bookings (${bkgCode} → Edit Booking).`);
+                }
+            }
+        }
+    }
+
     const updatePayload = { ...req.body };
     if (updatePayload.bookingRef && typeof updatePayload.bookingRef === 'object' && updatePayload.bookingRef._id) {
         updatePayload.bookingRef = updatePayload.bookingRef._id;

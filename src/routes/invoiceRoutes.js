@@ -6,7 +6,8 @@ const {
     getInvoiceById,
     updateInvoiceStatus,
     deleteInvoice,
-    updateInvoice
+    updateInvoice,
+    generateInvoiceFromBooking
 } = require('../controllers/invoiceController');
 const { adminOrExecutive, checkCompany, protect } = require('../middleware/authMiddleware');
 
@@ -22,6 +23,9 @@ router.route('/single/:id')
     .get(adminOrExecutive, getInvoiceById)
     .delete(adminOrExecutive, deleteInvoice)
     .put(adminOrExecutive, updateInvoice);
+
+router.route('/from-booking/:bookingId')
+    .post(adminOrExecutive, generateInvoiceFromBooking);
 
 router.route('/:id/status')
     .put(adminOrExecutive, updateInvoiceStatus);
