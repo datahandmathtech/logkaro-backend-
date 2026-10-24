@@ -1479,3 +1479,10 @@ Stack: TypeError: Cannot read properties of undefined (reading 'trim')
 [2026-10-23T12:50:32.246Z] CRON: Cron Jobs Initialized
 [2026-10-23T12:52:10.794Z] CRON: Cron Jobs Initialized
 [2026-10-23T12:52:18.610Z] CRON: Cron Jobs Initialized
+[2026-10-24T10:22:45.178Z] Login attempt started
+[2026-10-24T10:22:45.182Z] Login request for: Kavishuser1
+[2026-10-24T10:22:47.146Z] User found: Yatree (Role: Admin)
+[2026-10-24T10:22:47.324Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-24T10:22:47.324Z] Password matched
+[2026-10-24T10:22:47.325Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-24T10:23:28.557Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
