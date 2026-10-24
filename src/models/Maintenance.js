@@ -39,6 +39,10 @@ const maintenanceSchema = new mongoose.Schema({
         enum: ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'],
         default: 'Cash'
     },
+    bankAccount: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankAccount'
+    },
     paymentStatus: {
         type: String,
         enum: ['Paid', 'Due'],

@@ -9,6 +9,7 @@ const Company = require('../models/Company');
 const { removeFinancialTransaction } = require('../services/transactionSyncService');
 const { getNextClientCode } = require('../models/Sequence');
 const asyncHandler = require('express-async-handler');
+const Lead = require('../models/Lead');
 const { applyGuestFuelFloor } = require('../utils/guestFuel');
 
 // @desc    Get DRS duties for a company by date, view, or date range
@@ -256,6 +257,37 @@ const createDRSDuty = asyncHandler(async (req, res) => {
             paymentStatus: (advance >= totalRev && totalRev > 0) ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'No Advance'),
             notes: notes || guestRemarks || 'Direct Instant Booking from Live DRS'
         });
+
+        // Automatically create and link Lead so DRS direct bookings reflect in Sales Leads and Conversion sheet
+        try {
+            const createdLead = await Lead.create({
+                leadId: clientCode,
+                clientCode: clientCode,
+                company,
+                client: client._id,
+                clientName: clientName || 'Guest (TBA)',
+                mobileNumber: mobileNumber || 'TBA',
+                salesPerson: req.user ? req.user.name : 'Operations',
+                salesUser: req.user ? req.user._id : null,
+                bookingReference: 'Direct',
+                source: hotel ? `Live DRS (${hotel})` : 'Live DRS Operations',
+                leadDate: dutyDate,
+                advanceDate: advance > 0 ? dutyDate : dutyDate,
+                advanceAmount: advance || 0,
+                totalAmount: totalRev,
+                status: 'Confirmed',
+                priority: 'High',
+                bookingId: clientCode,
+                travelStartDate: dutyDate,
+                travelEndDate: endDateObj,
+                vehicleType: carType || 'Sedan',
+                itinerary: bookingItinerary
+            });
+            createdBooking.lead = createdLead._id;
+            await createdBooking.save();
+        } catch (leadErr) {
+            console.error('Error creating linked Lead from Live DRS booking:', leadErr);
+        }
 
         bookingRef = createdBooking._id;
     }

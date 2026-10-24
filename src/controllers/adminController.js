@@ -3231,6 +3231,7 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
         billDate,
         amount: numAmount,
         paymentMode: safePaymentMode,
+        bankAccount: (bankAccountId && bankAccountId !== 'null' && bankAccountId !== '') ? bankAccountId : null,
         paymentStatus: ['Paid', 'Due'].includes(paymentStatus) ? paymentStatus : 'Paid',
         paymentSource: effectivePaidBy === 'Guest' ? 'Guest' : 'Office',
         ...(currentKm ? { currentKm: Number(currentKm) } : {}),
@@ -3247,7 +3248,7 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
     const record = await Maintenance.create(maintenanceData);
 
     // 1. By Company Deduction (Cash vs Bank)
-    if (effectivePaidBy === 'Company') {
+    if (effectivePaidBy === 'Company' && paymentStatus !== 'Due') {
         const veh = await Vehicle.findById(vehicleId);
         await recordFinancialTransaction({
             companyId,
@@ -3386,6 +3387,7 @@ const getMaintenanceRecords = asyncHandler(async (req, res) => {
         Maintenance.find(query)
             .populate('vehicle', 'carNumber model')
             .populate('driver', 'name')
+            .populate('bankAccount', 'accountName bankName accountNumber')
             .sort({ billDate: -1 })
             .lean(),
         Parking.find(parkingQuery)
@@ -3577,6 +3579,9 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
         if (billDate) targetDoc.billDate = billDate;
         if (amount) targetDoc.amount = Number(amount);
         if (paymentMode && validPaymentModes.includes(paymentMode)) targetDoc.paymentMode = paymentMode;
+        if (bankAccountId !== undefined) {
+            targetDoc.bankAccount = (bankAccountId && bankAccountId !== 'null' && bankAccountId !== '') ? bankAccountId : null;
+        }
         if (paymentStatus && ['Paid', 'Due'].includes(paymentStatus)) targetDoc.paymentStatus = paymentStatus;
         if (paymentSource) targetDoc.paymentSource = paymentSource;
         if (currentKm) targetDoc.currentKm = Number(currentKm);
@@ -3586,23 +3591,31 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
 
         const updated = await targetDoc.save();
 
-        const veh = await Vehicle.findById(updated.vehicle);
-        await updateFinancialTransaction({
-            companyId: updated.company,
-            sourceId: updated._id,
-            sourceType: 'Maintenance',
-            amount: updated.amount,
-            date: updated.billDate,
-            paymentMode: updated.paymentMode,
-            bankAccountId: bankAccountId || null,
-            type: 'OUT',
-            category: 'Vehicle Maintenance',
-            description: `Maintenance (${updated.category || updated.maintenanceType}) for Vehicle ${veh?.carNumber || ''}`,
-            reference: updated.billNumber || '',
-            receiptPhoto: updated.billPhoto || '',
-            user: req.user?._id,
-            paidBy: updated.paymentSource === 'Guest' ? 'Guest' : 'Company'
-        });
+        if (updated.paymentStatus === 'Due') {
+            await removeFinancialTransaction({
+                sourceId: updated._id,
+                sourceType: 'Maintenance',
+                companyId: updated.company
+            });
+        } else {
+            const veh = await Vehicle.findById(updated.vehicle);
+            await updateFinancialTransaction({
+                companyId: updated.company,
+                sourceId: updated._id,
+                sourceType: 'Maintenance',
+                amount: updated.amount,
+                date: updated.billDate,
+                paymentMode: updated.paymentMode,
+                bankAccountId: updated.bankAccount || bankAccountId || null,
+                type: 'OUT',
+                category: 'Vehicle Maintenance',
+                description: `Maintenance (${updated.category || updated.maintenanceType}) for Vehicle ${veh?.carNumber || ''}`,
+                reference: updated.billNumber || '',
+                receiptPhoto: updated.billPhoto || '',
+                user: req.user?._id,
+                paidBy: updated.paymentSource === 'Guest' ? 'Guest' : 'Company'
+            });
+        }
 
         res.json(updated);
     } else if (docType === 'parking') {
@@ -4267,24 +4280,112 @@ const getPendingAllowances = asyncHandler(async (req, res) => {
 
         let formattedAllowances = [];
 
-        pendingDocs.forEach(doc => {
-            if (!doc.pendingExpenses) return;
+        for (const doc of pendingDocs) {
+            if (!doc.pendingExpenses) continue;
 
-            doc.pendingExpenses.forEach(exp => {
-                if ((exp.type === 'allowance_ta' || exp.type === 'allowance_night') && exp.status === 'pending') {
-                    formattedAllowances.push({
-                        _id: exp._id,
-                        attendanceId: doc._id,
-                        date: exp.createdAt || doc.date,
-                        driver: doc.driver?.name || 'Unknown',
-                        carNumber: doc.vehicle?.carNumber || 'Unknown',
-                        amount: exp.amount,
-                        type: exp.type === 'allowance_ta' ? 'Same Day Return (TA)' : 'Night Hold',
-                        rawType: exp.type
-                    });
+            const pendingExps = doc.pendingExpenses.filter(
+                exp => (exp.type === 'allowance_ta' || exp.type === 'allowance_night') && exp.status === 'pending'
+            );
+
+            if (pendingExps.length === 0) continue;
+
+            // Resolve date window for finding matching DRS Duty or Booking
+            const dateStr = doc.date || '';
+            let startDT = null;
+            let endDT = null;
+            if (dateStr) {
+                const dt = DateTime.fromISO(dateStr, { zone: 'Asia/Kolkata' });
+                startDT = dt.startOf('day').minus({ hours: 6 }).toJSDate();
+                endDT = dt.endOf('day').plus({ hours: 6 }).toJSDate();
+            }
+
+            let matchedDuty = null;
+
+            // 1. Match DRSDuty by driver & date
+            if (startDT && endDT && doc.driver?._id) {
+                matchedDuty = await DRSDuty.findOne({
+                    company: doc.company,
+                    date: { $gte: startDT, $lte: endDT },
+                    $or: [
+                        { driver: doc.driver._id },
+                        { customDriverName: new RegExp('^' + (doc.driver.name || '').trim() + '$', 'i') }
+                    ]
+                }).sort({ time: 1 }).lean();
+            }
+
+            // 2. Fallback: Match DRSDuty by vehicle & date
+            if (!matchedDuty && startDT && endDT && doc.vehicle) {
+                const cleanCar = (doc.vehicle.carNumber || '').replace(/\s+/g, '');
+                matchedDuty = await DRSDuty.findOne({
+                    company: doc.company,
+                    date: { $gte: startDT, $lte: endDT },
+                    $or: [
+                        { vehicle: doc.vehicle._id },
+                        { customCarNumber: new RegExp(cleanCar, 'i') }
+                    ]
+                }).sort({ time: 1 }).lean();
+            }
+
+            // 3. Fallback: Match Booking by driver & date in itinerary
+            if (!matchedDuty && startDT && endDT && doc.driver?._id) {
+                const booking = await Booking.findOne({
+                    company: doc.company,
+                    'itinerary.date': { $gte: startDT, $lte: endDT },
+                    $or: [
+                        { 'itinerary.driver': doc.driver._id },
+                        { 'itinerary.driverName': new RegExp('^' + (doc.driver.name || '').trim() + '$', 'i') }
+                    ]
+                }).lean();
+                if (booking) {
+                    const dayItem = booking.itinerary?.find(it => {
+                        const itDate = new Date(it.date).toISOString().split('T')[0];
+                        return itDate === dateStr;
+                    }) || booking.itinerary?.[0];
+
+                    matchedDuty = {
+                        bookingId: booking.bookingId || booking.clientCode,
+                        duty: dayItem?.duty || booking.dutyType || 'Duty Booking',
+                        itinerary: dayItem?.description || booking.itineraryDescription,
+                        clientName: booking.clientName,
+                        hotel: booking.hotel || dayItem?.pickupPoint,
+                        pickupPoint: dayItem?.pickupPoint || booking.pickupLocation,
+                        time: dayItem?.time || '09:00 AM'
+                    };
                 }
+            }
+
+            const dutySummary = matchedDuty ? {
+                bookingId: matchedDuty.bookingId || '',
+                duty: matchedDuty.duty || matchedDuty.itinerary || 'DRS Duty',
+                itinerary: matchedDuty.itinerary || '',
+                guestName: matchedDuty.clientName || matchedDuty.guestName || doc.guestName || '',
+                hotel: matchedDuty.hotel || '',
+                pickupPoint: matchedDuty.pickupPoint || '',
+                time: matchedDuty.time || ''
+            } : (doc.guestName || doc.dutyType || doc.punchOut?.remarks) ? {
+                bookingId: '',
+                duty: doc.dutyType || doc.punchOut?.remarks || 'Attendance Duty',
+                itinerary: '',
+                guestName: doc.guestName || '',
+                hotel: '',
+                pickupPoint: doc.pickUpLocation || '',
+                time: doc.dutyTime || ''
+            } : null;
+
+            pendingExps.forEach(exp => {
+                formattedAllowances.push({
+                    _id: exp._id,
+                    attendanceId: doc._id,
+                    date: exp.createdAt || doc.date,
+                    driver: doc.driver?.name || 'Unknown',
+                    carNumber: doc.vehicle?.carNumber || 'Unknown',
+                    amount: exp.amount,
+                    type: exp.type === 'allowance_ta' ? 'Same Day Return (TA)' : 'Night Hold',
+                    rawType: exp.type,
+                    drsDuty: dutySummary
+                });
             });
-        });
+        }
 
         res.json(formattedAllowances);
     } catch (error) {
