@@ -834,24 +834,64 @@ const getAllDrivers = asyncHandler(async (req, res) => {
                 const driverIds = drivers.map(d => d._id);
                 let validDriverIds = new Set(driverIds.map(id => id.toString()));
 
-                if (req.query.exactDate === 'true') {
+                if (req.query.exactVehicleId) {
+                    const startOfDay = req.query.toDate
+                        ? new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), 0, 0, 0)
+                        : new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+                    const endOfDay = req.query.toDate
+                        ? new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), 23, 59, 59, 999)
+                        : new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                    const targetDateStr = req.query.toDate || todayStr;
+
+                    // 1. Find drivers who have attendance on this vehicle (today or on target date, active or completed)
+                    const vehicleAttendances = await Attendance.find({
+                        driver: { $in: driverIds },
+                        vehicle: req.query.exactVehicleId,
+                        $or: [
+                            { date: targetDateStr },
+                            { 'punchIn.time': { $gte: startOfDay, $lte: endOfDay } },
+                            { status: 'incomplete' }
+                        ]
+                    }).select('driver status').lean();
+
+                    const vehicleDriverIds = new Set(vehicleAttendances.map(a => a.driver?.toString()).filter(Boolean));
+
+                    // 2. Also check if vehicle has currentDriver (e.g. assigned on punch-in)
+                    const vehicleDoc = await Vehicle.findById(req.query.exactVehicleId).select('currentDriver').lean();
+                    if (vehicleDoc?.currentDriver) {
+                        vehicleDriverIds.add(vehicleDoc.currentDriver.toString());
+                    }
+
+                    // 3. Also check drivers whose assignedVehicle is this vehicle
+                    const assignedDrivers = await User.find({
+                        _id: { $in: driverIds },
+                        assignedVehicle: req.query.exactVehicleId
+                    }).select('_id').lean();
+                    assignedDrivers.forEach(d => vehicleDriverIds.add(d._id.toString()));
+
+                    // If drivers were matched specifically for this vehicle, restrict to them
+                    if (vehicleDriverIds.size > 0) {
+                        validDriverIds = vehicleDriverIds;
+                    }
+                } else if (req.query.exactDate === 'true') {
                     const startOfDay = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), 0, 0, 0);
-                    const endOfDay = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), 23, 59, 59);
+                    const endOfDay = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), 23, 59, 59, 999);
+                    const targetDateStr = req.query.toDate || todayStr;
                     
                     const attQuery = {
                         driver: { $in: driverIds },
-                        'punchIn.time': { $gte: startOfDay, $lte: endOfDay }
+                        $or: [
+                            { date: targetDateStr },
+                            { 'punchIn.time': { $gte: startOfDay, $lte: endOfDay } },
+                            { status: 'incomplete' }
+                        ]
                     };
-                    if (req.query.exactVehicleId) {
-                        attQuery.vehicle = req.query.exactVehicleId;
-                    }
                     
                     const dayAttendances = await Attendance.find(attQuery).select('driver').lean();
-                    
-                    validDriverIds = new Set(dayAttendances.map(a => a.driver.toString()));
+                    validDriverIds = new Set(dayAttendances.map(a => a.driver?.toString()).filter(Boolean));
                 } else if (isBackMonth) {
                     startOfMonth = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), 1);
-                    endOfMonth = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 0, 23, 59, 59);
+                    endOfMonth = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + 1, 0, 23, 59, 59, 999);
                     
                     const monthAttendances = await Attendance.find({
                         driver: { $in: driverIds },
@@ -861,12 +901,20 @@ const getAllDrivers = asyncHandler(async (req, res) => {
                 } else {
                     const thirtyDaysAgo = new Date(referenceDate);
                     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                    const endOfRefDate = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate(), 23, 59, 59, 999);
                     
                     const recentAttendances = await Attendance.find({
                         driver: { $in: driverIds },
-                        'punchIn.time': { $gte: thirtyDaysAgo, $lte: referenceDate }
+                        $or: [
+                            { 'punchIn.time': { $gte: thirtyDaysAgo, $lte: endOfRefDate } },
+                            { status: 'incomplete' }
+                        ]
                     }).select('driver').lean();
-                    const activeFreelancerIds = new Set(recentAttendances.map(a => a.driver.toString()));
+                    const activeFreelancerIds = new Set(recentAttendances.map(a => a.driver?.toString()).filter(Boolean));
+
+                    // Always ensure currently on duty or completed today drivers are active
+                    activeAtSet.forEach(id => activeFreelancerIds.add(id));
+                    completedAtSet.forEach(id => activeFreelancerIds.add(id));
 
                     validDriverIds = new Set(drivers.filter(d => {
                         if (d.isFreelancer) {
