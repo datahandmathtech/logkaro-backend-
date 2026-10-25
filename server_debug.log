@@ -1,0 +1,47 @@
+[2026-10-25T07:53:57.050Z] CRON: Cron Jobs Initialized
+[2026-10-25T08:06:30.383Z] Login attempt started
+[2026-10-25T08:06:30.384Z] Login request for: Piyush123
+[2026-10-25T08:06:32.429Z] User found: Piyush Menaria (Role: Driver)
+[2026-10-25T08:06:32.651Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$7zU, isMatch=true
+[2026-10-25T08:06:32.652Z] Password matched
+[2026-10-25T08:06:32.652Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-25T08:12:33.553Z] Login attempt started
+[2026-10-25T08:12:33.554Z] Login request for: Piyush123
+[2026-10-25T08:12:33.794Z] User found: Piyush Menaria (Role: Driver)
+[2026-10-25T08:12:33.967Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$7zU, isMatch=true
+[2026-10-25T08:12:33.969Z] Password matched
+[2026-10-25T08:12:33.969Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-25T08:14:03.628Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T08:14:05.733Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T08:14:07.548Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T08:19:20.535Z] CRON: Cron Jobs Initialized
+[2026-10-25T08:20:10.416Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T08:20:13.885Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T08:20:16.854Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T08:34:33.528Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T08:34:35.187Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T08:34:37.413Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T08:35:27.608Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T08:35:30.475Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T08:35:30.888Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T08:36:27.880Z] CRON: Cron Jobs Initialized
+[2026-10-25T08:39:29.091Z] Login attempt started
+[2026-10-25T08:39:29.092Z] Login request for: Kavishuser1
+[2026-10-25T08:39:31.263Z] User found: Yatree (Role: Admin)
+[2026-10-25T08:39:31.462Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-25T08:39:31.463Z] Password matched
+[2026-10-25T08:39:31.463Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-25T08:39:42.245Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-25T08:39:42.992Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-25T08:40:09.823Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-25T08:40:09.868Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-25T08:40:10.319Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-25T08:40:26.884Z] Login attempt started
+[2026-10-25T08:40:26.885Z] Login request for: Piyush123
+[2026-10-25T08:40:27.131Z] User found: Piyush Menaria (Role: Driver)
+[2026-10-25T08:40:27.292Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$7zU, isMatch=true
+[2026-10-25T08:40:27.293Z] Password matched
+[2026-10-25T08:40:27.293Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-25T08:40:28.873Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T08:40:29.174Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T08:40:29.588Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160

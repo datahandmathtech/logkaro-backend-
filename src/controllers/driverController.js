@@ -25,15 +25,53 @@ const logToFile = (msg) => {
 };
 
 // Helper: fetch assigned upcoming duties for driver (from DRSDuty + Booking)
-const fetchDriverAssignedDuties = async (driverId, companyId) => {
+const fetchDriverAssignedDuties = async (driverId, companyId, queryOptions = {}) => {
     try {
         const nowIST = DateTime.now().setZone('Asia/Kolkata');
-        const startOfToday = nowIST.startOf('day').minus({ hours: 6 }).toJSDate();
         const todayStr = nowIST.toFormat('yyyy-MM-dd');
+        let dateQuery = {};
+
+        const startOfToday = nowIST.startOf('day').toJSDate();
+
+        if (queryOptions.month && /^\d{4}-\d{2}$/.test(queryOptions.month)) {
+            const [yr, mo] = queryOptions.month.split('-').map(Number);
+            const isCurrentMonth = (yr === nowIST.year && mo === nowIST.month);
+            const isPastMonth = (yr < nowIST.year || (yr === nowIST.year && mo < nowIST.month));
+
+            if (isPastMonth) {
+                // Past month: strictly show Current (Today) and Aane Wali (Upcoming) rides
+                return [];
+            }
+
+            let startMonth;
+            if (isCurrentMonth) {
+                // Current month: strictly show Current (Today) and Aane Wali (Upcoming) rides
+                startMonth = startOfToday;
+            } else {
+                startMonth = DateTime.fromObject({ year: yr, month: mo, day: 1 }, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
+            }
+            const endMonth = DateTime.fromObject({ year: yr, month: mo, day: 1 }, { zone: 'Asia/Kolkata' }).endOf('month').toJSDate();
+            dateQuery = { $gte: startMonth, $lte: endMonth };
+        } else if (queryOptions.from && queryOptions.to) {
+            const startFrom = DateTime.fromISO(queryOptions.from, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
+            const effectiveStart = startFrom < startOfToday ? startOfToday : startFrom;
+            const endTo = DateTime.fromISO(queryOptions.to, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
+            dateQuery = { $gte: effectiveStart, $lte: endTo };
+        } else {
+            dateQuery = { $gte: startOfToday };
+        }
+
+        const driverDoc = await User.findById(driverId).select('name');
+        const driverName = driverDoc?.name?.trim();
+
+        const orConditions = [{ driver: driverId }];
+        if (driverName) {
+            orConditions.push({ customDriverName: new RegExp(`^${driverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+        }
 
         const duties = await DRSDuty.find({
-            driver: driverId,
-            date: { $gte: startOfToday }
+            $or: orConditions,
+            date: dateQuery
         })
         .populate('vehicle', 'carNumber model carType type brand')
         .populate('bookingRef', 'bookingId clientCode clientName mobileNumber travelStartDate travelEndDate pickupLocation dropLocation specialRemarks notes')
@@ -992,7 +1030,7 @@ const getDriverUpcomingRides = async (req, res) => {
     try {
         const driver = await User.findById(req.user._id);
         const companyId = driver.company?._id || driver.company;
-        const rides = await fetchDriverAssignedDuties(req.user._id, companyId);
+        const rides = await fetchDriverAssignedDuties(req.user._id, companyId, req.query);
         res.json({
             success: true,
             count: rides.length,
