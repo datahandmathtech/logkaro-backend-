@@ -205,6 +205,10 @@ const leadSchema = new mongoose.Schema({
         totalProfit: { type: Number, default: 0 },
         perDayProfit: { type: Number, default: 0 }
     },
+    vehicleMatrices: {
+        type: Array,
+        default: []
+    },
     remarksHistory: [remarkSchema]
 }, {
     timestamps: true

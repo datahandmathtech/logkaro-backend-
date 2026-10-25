@@ -306,15 +306,16 @@ const updateBooking = asyncHandler(async (req, res) => {
     // Only sync if this booking has ALREADY been sent to Live DRS via "Assign Drivers & Vehicles"
     // -------------------------------------------------------------------------
     try {
-        const dutyMatch = {
-            $or: [
-                { bookingRef: booking._id },
-                { bookingId: booking.bookingId }
-            ]
-        };
-        if (Array.isArray(booking.drsDuties) && booking.drsDuties.length > 0) {
-            dutyMatch.$or.push({ _id: { $in: booking.drsDuties } });
+        const dutyMatchOr = [
+            { bookingRef: booking._id }
+        ];
+        if (booking.bookingId && String(booking.bookingId).trim()) {
+            dutyMatchOr.push({ bookingId: String(booking.bookingId).trim() });
         }
+        if (Array.isArray(booking.drsDuties) && booking.drsDuties.length > 0) {
+            dutyMatchOr.push({ _id: { $in: booking.drsDuties } });
+        }
+        const dutyMatch = { $or: dutyMatchOr };
 
         let existingDuties = await DRSDuty.find(dutyMatch).sort({ dayNo: 1, date: 1 });
 
@@ -394,7 +395,8 @@ const updateBooking = asyncHandler(async (req, res) => {
 
                         await matchedDuty.save();
                         updatedDutyIds.push(matchedDuty._id);
-                    } else {
+                    } else if (item.driver || item.driverId || item.driverName || item.vehicle || item.vehicleId || item.vehicleNumber) {
+                        // Only create a new DRSDuty if a driver or vehicle is explicitly provided
                         const newDuty = await DRSDuty.create({
                             company: booking.company,
                             bookingRef: booking._id,

@@ -313,6 +313,7 @@ const createLead = asyncHandler(async (req, res) => {
         notes,
         specialRemarks: specialRemarks || '',
         vehicleMatrix: req.body.vehicleMatrix || {},
+        vehicleMatrices: Array.isArray(req.body.vehicleMatrices) ? req.body.vehicleMatrices : [],
         inclusions: inclusions || {
             driverAllowance: true,
             nightAllowance: true,
