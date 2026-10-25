@@ -48,3 +48,31 @@
 [2026-10-25T08:54:34.852Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
 [2026-10-25T08:54:37.223Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
 [2026-10-25T08:54:43.473Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:01:03.042Z] Login attempt started
+[2026-10-25T09:01:03.043Z] Login request for: Piyush123
+[2026-10-25T09:01:03.318Z] User found: Piyush Menaria (Role: Driver)
+[2026-10-25T09:01:03.509Z] Match debug: receivedPwdLen=10, dbHashStart=$2a$10$7zU, isMatch=true
+[2026-10-25T09:01:03.510Z] Password matched
+[2026-10-25T09:01:03.510Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-25T09:01:04.816Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:01:05.163Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T09:01:05.439Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:06:36.366Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:06:36.697Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T09:06:36.926Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:07:09.404Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:07:09.595Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T09:07:09.812Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:07:45.592Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:07:45.757Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T09:07:45.917Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:15:14.163Z] CRON: Cron Jobs Initialized
+[2026-10-25T09:20:03.676Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:20:07.262Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 4 vehicles
+[2026-10-25T09:20:10.596Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:20:48.994Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:20:50.310Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 4 vehicles
+[2026-10-25T09:20:51.759Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T09:21:04.907Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T09:21:05.078Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 4 vehicles
+[2026-10-25T09:21:05.265Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160

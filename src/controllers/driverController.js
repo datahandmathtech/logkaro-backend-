@@ -74,7 +74,7 @@ const fetchDriverAssignedDuties = async (driverId, companyId, queryOptions = {})
             date: dateQuery
         })
         .populate('vehicle', 'carNumber model carType type brand')
-        .populate('bookingRef', 'bookingId clientCode clientName mobileNumber travelStartDate travelEndDate pickupLocation dropLocation specialRemarks notes')
+        .populate('bookingRef', 'bookingId clientCode clientName mobileNumber travelStartDate travelEndDate pickupLocation dropLocation specialRemarks notes itinerary')
         .sort({ date: 1, time: 1 });
 
         return duties.map(d => {
@@ -84,6 +84,41 @@ const fetchDriverAssignedDuties = async (driverId, companyId, queryOptions = {})
 
             const vehicleNum = d.vehicle?.carNumber || d.customCarNumber || d.vehicleNumber || 'Cab Assigned';
             const vehicleModel = d.vehicle?.carType || d.vehicle?.model || d.carType || 'Cab';
+
+            // Extract guest's full tour plan from bookingRef.itinerary
+            const rawTourPlan = (d.bookingRef?.itinerary && Array.isArray(d.bookingRef.itinerary) && d.bookingRef.itinerary.length > 0)
+                ? d.bookingRef.itinerary.map(item => {
+                    const itemIST = item.date ? DateTime.fromJSDate(new Date(item.date)).setZone('Asia/Kolkata') : null;
+                    const itemDateStr = itemIST ? itemIST.toFormat('yyyy-MM-dd') : '';
+                    return {
+                        dayNo: item.dayNo || 1,
+                        dateStr: itemDateStr,
+                        dateFormatted: itemIST ? itemIST.toFormat('dd LLL') : '',
+                        weekday: itemIST ? itemIST.toFormat('ccc') : '',
+                        time: item.time || '',
+                        duty: item.duty || item.description || '',
+                        description: item.description || '',
+                        pickupPoint: item.pickupPoint || '',
+                        vehicleNumber: item.vehicleNumber || vehicleNum,
+                        vehicleType: item.vehicleType || vehicleModel,
+                        isCurrentDay: Boolean(dutyDateStr && itemDateStr === dutyDateStr)
+                    };
+                })
+                : [];
+
+            const tourPlan = rawTourPlan.length > 0 ? rawTourPlan : [{
+                dayNo: d.dayNo || 1,
+                dateStr: dutyDateStr,
+                dateFormatted: dutyIST ? dutyIST.toFormat('dd LLL') : '',
+                weekday: dutyIST ? dutyIST.toFormat('ccc') : '',
+                time: d.time || '09:00 AM',
+                duty: d.duty || d.itinerary || 'Tour Duty',
+                description: d.itinerary || d.duty || '',
+                pickupPoint: d.pickupPoint || d.hotel || '',
+                vehicleNumber: vehicleNum,
+                vehicleType: vehicleModel,
+                isCurrentDay: true
+            }];
 
             return {
                 _id: d._id,
@@ -96,7 +131,10 @@ const fetchDriverAssignedDuties = async (driverId, companyId, queryOptions = {})
                 mobileNumber: d.mobileNumber || d.bookingRef?.mobileNumber || '',
                 hotel: d.hotel || '',
                 pickupPoint: d.pickupPoint || d.bookingRef?.pickupLocation || d.hotel || '',
+                dropLocation: d.bookingRef?.dropLocation || '',
                 duty: d.duty || d.itinerary || 'Tour Duty',
+                itineraryText: d.itinerary || d.duty || '',
+                tourPlan,
                 carType: vehicleModel,
                 vehicleNumber: vehicleNum,
                 vehicleId: d.vehicle?._id || null,
