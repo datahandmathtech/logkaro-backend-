@@ -45,3 +45,6 @@
 [2026-10-25T08:40:28.873Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
 [2026-10-25T08:40:29.174Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
 [2026-10-25T08:40:29.588Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
+[2026-10-25T08:54:34.852Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Company: 698ac8b01587e01651a49443
+[2026-10-25T08:54:37.223Z] DRIVER_CTRL: getDriverDashboard - User: 6993281b2ce72b5bec5721ce, Comp: 698ac8b01587e01651a49443, Found: 5 vehicles
+[2026-10-25T08:54:43.473Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ-27-TB-0160
