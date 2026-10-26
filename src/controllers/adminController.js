@@ -7622,7 +7622,7 @@ const getVehicleMonthlyDetails = asyncHandler(async (req, res) => {
     }).select('carNumber model fastagHistory');
 
     // 2. Fetch all related data for the month concurrently
-    const [fuelData, maintenanceData, parkingData, attendanceData, borderTaxData, allAllowances] = await Promise.all([
+    const [fuelData, maintenanceData, parkingData, attendanceData, borderTaxData, allAllowances, drsDuties] = await Promise.all([
         Fuel.find({
             ...companyQuery,
             date: { $gte: monthStart, $lte: monthEnd }
@@ -7647,7 +7647,12 @@ const getVehicleMonthlyDetails = asyncHandler(async (req, res) => {
         Allowance.find({
             ...companyQuery,
             date: { $gte: monthStart, $lte: monthEnd }
-        })
+        }),
+        DRSDuty.find({
+            ...companyQuery,
+            date: { $gte: monthStart, $lte: monthEnd },
+            status: { $ne: 'Cancelled' }
+        }).populate('vehicle', 'carNumber model type').populate('driver', 'name mobile')
     ]);
 
     // PRE-CALCULATE DRIVER SALARIES to correctly attribute daily wage once per day across the whole fleet
@@ -7962,10 +7967,36 @@ const getVehicleMonthlyDetails = asyncHandler(async (req, res) => {
             }
         });
 
+        // DRS Duties (Earnings / Kamai)
+        const vLast4 = (v.carNumber || '').replace(/[^0-9]/g, '').slice(-4);
+        const vDuties = (drsDuties || []).filter(d => {
+            if (d.isOutsideCar) return false;
+            const vehRefId = d.vehicle?._id ? d.vehicle._id.toString() : (d.vehicle ? d.vehicle.toString() : '');
+            if (vehRefId && vehRefId === vId) return true;
+            const rawCar = (d.vehicle?.carNumber || d.customCarNumber || '').replace(/[^0-9]/g, '');
+            if (vLast4 && rawCar.slice(-4) === vLast4) return true;
+            return false;
+        }).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+        const totalEarnings = vDuties.reduce((sum, d) => sum + (Number(d.revenue || d.totalAmount || 0)), 0);
+        const bookedDays = new Set(vDuties.map(d => d.date ? new Date(d.date).toISOString().split('T')[0] : '').filter(Boolean)).size;
+
         return {
             vehicleId: vId,
             carNumber: v.carNumber,
             model: v.model,
+            totalEarnings,
+            dutyCount: vDuties.length,
+            bookedDays,
+            duties: vDuties.map(d => ({
+                _id: d._id,
+                date: d.date,
+                clientName: d.clientName,
+                duty: d.duty || d.itinerary,
+                revenue: Number(d.revenue || d.totalAmount || 0),
+                bookingId: d.bookingId,
+                driverName: d.driver?.name || d.customDriverName || ''
+            })),
             driverSalary: currentVehicleSalary,
             reimbursableParking: totalReimbursableParking,
             drivers: Object.keys(currentVehicleBreakdown),
@@ -8047,7 +8078,8 @@ const getVehicleMonthlyDetails = asyncHandler(async (req, res) => {
         summary: {
             totalSalary: totalStaffEarnings + totalFreelancerEarnings,
             staffSalary: totalStaffEarnings,
-            freelancerSalary: totalFreelancerEarnings
+            freelancerSalary: totalFreelancerEarnings,
+            totalEarnings: vehicleDetails.reduce((s, v) => s + (v.totalEarnings || 0), 0)
         }
     });
 });
