@@ -387,24 +387,40 @@ const updateCashTransaction = asyncHandler(async (req, res) => {
         throw new Error('Cash transaction not found');
     }
 
-    const { amount, description, category, reference, receiptPhoto, date } = req.body;
+    const { amount, type, description, category, reference, receiptPhoto, date, bookingRef, clientId, guestName, driverRef, driverName } = req.body;
     const oldAmount = tx.amount;
     const oldType = tx.type;
+    const newType = type || oldType;
     const newAmount = amount !== undefined && amount !== '' ? Number(amount) : oldAmount;
     const diff = newAmount - oldAmount;
     const parsedDate = date !== undefined && date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : tx.date;
 
-    if (amount !== undefined) {
-        tx.amount = newAmount;
+    tx.amount = newAmount;
+    tx.type = newType;
 
-        // Adjust company cash balance
-        const comp = await Company.findById(tx.company);
-        if (comp) {
-            // Revert old impact
-            comp.cashBalance = (comp.cashBalance || 0) - (oldType === 'IN' ? oldAmount : -oldAmount);
-            // Apply new impact
-            comp.cashBalance = comp.cashBalance + (oldType === 'IN' ? newAmount : -newAmount);
-            await comp.save();
+    // Adjust company cash balance
+    const comp = await Company.findById(tx.company);
+    if (comp) {
+        // Revert old impact
+        comp.cashBalance = (comp.cashBalance || 0) - (oldType === 'IN' ? oldAmount : -oldAmount);
+        // Apply new impact
+        comp.cashBalance = comp.cashBalance + (newType === 'IN' ? newAmount : -newAmount);
+        await comp.save();
+    }
+
+    // Sync linked Advance (e.g. driver/freelancer advance created mistakenly or updated)
+    if (tx.sourceType === 'Advance' && tx.sourceId) {
+        try {
+            const Advance = require('../models/Advance');
+            const adv = await Advance.findById(tx.sourceId);
+            if (adv) {
+                if (amount !== undefined && amount !== '') adv.amount = newAmount;
+                if (date) adv.date = parsedDate;
+                if (description !== undefined) adv.remark = description;
+                await adv.save();
+            }
+        } catch (advSyncErr) {
+            console.error('Error syncing cash tx edit to Advance model:', advSyncErr);
         }
     }
 
@@ -506,6 +522,11 @@ const updateCashTransaction = asyncHandler(async (req, res) => {
     if (category !== undefined) tx.category = category;
     if (reference !== undefined) tx.reference = reference;
     if (receiptPhoto !== undefined) tx.receiptPhoto = receiptPhoto;
+    if (guestName !== undefined) tx.guestName = guestName;
+    if (driverName !== undefined) tx.driverName = driverName;
+    if (bookingRef !== undefined) tx.bookingRef = bookingRef || null;
+    if (clientId !== undefined) tx.client = clientId || null;
+    if (driverRef !== undefined) tx.driverRef = driverRef || null;
     if (date !== undefined && date) {
         tx.date = parsedDate;
     }
@@ -542,6 +563,40 @@ const deleteCashTransaction = asyncHandler(async (req, res) => {
                 bank.currentBalance = (bank.currentBalance || 0) + tx.amount;
                 await bank.save();
             }
+        }
+    }
+
+    // If it was created from an Advance (e.g. driver or freelancer advance), delete the linked advance too
+    if (tx.sourceType === 'Advance' && tx.sourceId) {
+        try {
+            const Advance = require('../models/Advance');
+            await Advance.findByIdAndDelete(tx.sourceId);
+        } catch (advDelErr) {
+            console.error('Error deleting linked advance:', advDelErr);
+        }
+    }
+
+    // If linked to a booking, adjust advancePaid / balanceDue
+    if (tx.bookingRef) {
+        try {
+            const Booking = require('../models/Booking');
+            const booking = await Booking.findById(tx.bookingRef);
+            if (booking) {
+                const updatedAdv = tx.type === 'IN'
+                    ? Math.max(0, (booking.advancePaid || 0) - tx.amount)
+                    : (booking.advancePaid || 0) + tx.amount;
+                const fuelDed = booking.guestFuelFilled ? (Number(booking.guestFuelAmount) || 0) : 0;
+                const balDue = Math.max(0, (Number(booking.totalAmount) || 0) - updatedAdv - fuelDed);
+                await Booking.findByIdAndUpdate(booking._id, {
+                    $set: {
+                        advancePaid: updatedAdv,
+                        balanceDue: balDue,
+                        paymentStatus: balDue <= 0 ? 'Full Received' : ((updatedAdv + fuelDed) > 0 ? 'Partial' : 'Pending')
+                    }
+                });
+            }
+        } catch (bkgErr) {
+            console.error('Error adjusting booking on cash tx delete:', bkgErr);
         }
     }
 

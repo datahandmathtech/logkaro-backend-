@@ -88,3 +88,26 @@
 [2026-10-25T09:49:27.849Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-10-25T09:49:35.638Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-10-25T09:50:26.154Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-25T10:02:56.759Z] GLOBAL_ERROR: Failed to fetch pending allowances: Connection pool for ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017 was cleared because another operation failed with: "connection 13 to 159.41.234.132:27017 closed" - Stack: Error: Failed to fetch pending allowances: Connection pool for ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017 was cleared because another operation failed with: "connection 13 to 159.41.234.132:27017 closed"
+    at E:\New folder\Master-Server\TEXI\yatree-backend\src\controllers\adminController.js:4441:15
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[2026-10-25T10:02:56.761Z] GLOBAL_ERROR: Connection pool for ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017 was cleared because another operation failed with: "connection 13 to 159.41.234.132:27017 closed" - Stack: MongoPoolClearedError: Connection pool for ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017 was cleared because another operation failed with: "connection 13 to 159.41.234.132:27017 closed"
+    at ConnectionPool.processWaitQueue (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:449:82)
+    at ConnectionPool.clear (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:243:14)
+    at updateServers (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\sdam\topology.js:518:29)
+    at Topology.serverUpdateHandler (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\sdam\topology.js:394:9)
+    at Server.<anonymous> (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\sdam\topology.js:501:77)
+    at Server.emit (node:events:519:28)
+    at markServerUnknown (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\sdam\server.js:358:12)
+    at Server.handleError (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\sdam\server.js:249:17)
+    at E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:395:25
+[2026-10-26T05:47:44.116Z] Login attempt started
+[2026-10-26T05:47:44.117Z] Login request for: Kavishuser1
+[2026-10-26T05:47:44.329Z] User found: Yatree (Role: Admin)
+[2026-10-26T05:47:44.564Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-26T05:47:44.564Z] Password matched
+[2026-10-26T05:47:44.565Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-26T05:57:38.123Z] CRON: Cron Jobs Initialized
+[2026-10-26T05:57:51.266Z] CRON: Cron Jobs Initialized
+[2026-10-26T06:00:51.310Z] CRON: Cron Jobs Initialized
+[2026-10-26T06:01:23.022Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}

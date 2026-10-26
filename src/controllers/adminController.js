@@ -7366,7 +7366,7 @@ const getDriverSalaryDetails = asyncHandler(async (req, res) => {
         } else {
             advanceFilter.date = { $gte: startOfMonth, $lte: endOfMonth };
         }
-        const advances = await Advance.find(advanceFilter).sort({ date: 1 });
+        const advances = await Advance.find(advanceFilter).populate('bankAccount', 'bankName accountNumber').sort({ date: 1 });
 
         // 4. Fetch Loans (to show tenure/EMI in PDF/UI)
         const loanQuery = {
