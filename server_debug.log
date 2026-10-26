@@ -111,3 +111,7 @@
 [2026-10-26T05:57:51.266Z] CRON: Cron Jobs Initialized
 [2026-10-26T06:00:51.310Z] CRON: Cron Jobs Initialized
 [2026-10-26T06:01:23.022Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-26T06:15:26.199Z] CRON: Cron Jobs Initialized
+[2026-10-26T06:15:34.904Z] CRON: Cron Jobs Initialized
+[2026-10-26T06:16:42.148Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-26T06:17:25.553Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}

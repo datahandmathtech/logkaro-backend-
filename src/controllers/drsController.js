@@ -1,6 +1,9 @@
 const DRSDuty = require('../models/DRSDuty');
 const Booking = require('../models/Booking');
 const Client = require('../models/Client');
+const User = require('../models/User');
+const Vehicle = require('../models/Vehicle');
+const mongoose = require('mongoose');
 const LedgerEntry = require('../models/LedgerEntry');
 const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
@@ -434,6 +437,46 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     }
     if (updatePayload.hotel !== undefined && updatePayload.pickupPoint === undefined) {
         updatePayload.pickupPoint = updatePayload.hotel;
+    }
+
+    // Sanitize driver ObjectId / Outside Driver
+    if (updatePayload.driver !== undefined) {
+        if (!updatePayload.driver || updatePayload.driver === 'custom' || updatePayload.driver === 'null') {
+            updatePayload.driver = null;
+        } else if (typeof updatePayload.driver === 'object' && updatePayload.driver._id) {
+            updatePayload.driver = updatePayload.driver._id;
+        } else if (typeof updatePayload.driver === 'string' && !mongoose.Types.ObjectId.isValid(updatePayload.driver)) {
+            updatePayload.driver = null;
+        }
+
+        // If driver assigned, sync customDriverName & driverMobile with User record
+        if (updatePayload.driver) {
+            const drvUser = await User.findById(updatePayload.driver).select('name mobile phone').lean();
+            if (drvUser) {
+                updatePayload.customDriverName = drvUser.name;
+                updatePayload.driverMobile = drvUser.mobile || drvUser.phone || '';
+            }
+        }
+    }
+
+    // Sanitize vehicle ObjectId / Outside Vehicle
+    if (updatePayload.vehicle !== undefined) {
+        if (!updatePayload.vehicle || updatePayload.vehicle === 'custom' || updatePayload.vehicle === 'null') {
+            updatePayload.vehicle = null;
+        } else if (typeof updatePayload.vehicle === 'object' && updatePayload.vehicle._id) {
+            updatePayload.vehicle = updatePayload.vehicle._id;
+        } else if (typeof updatePayload.vehicle === 'string' && !mongoose.Types.ObjectId.isValid(updatePayload.vehicle)) {
+            updatePayload.vehicle = null;
+        }
+
+        // If vehicle assigned, sync customCarNumber with Vehicle record
+        if (updatePayload.vehicle) {
+            const vehObj = await Vehicle.findById(updatePayload.vehicle).select('carNumber model type').lean();
+            if (vehObj) {
+                updatePayload.customCarNumber = vehObj.carNumber;
+                if (!updatePayload.carType) updatePayload.carType = vehObj.type || vehObj.model || 'Sedan';
+            }
+        }
     }
 
     const updatedDuty = await DRSDuty.findByIdAndUpdate(
