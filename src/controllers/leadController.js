@@ -38,17 +38,21 @@ const getLeads = asyncHandler(async (req, res) => {
     const lastSync = LAST_LEAD_AUTO_SYNC.get(String(companyId)) || 0;
     if (Date.now() - lastSync > LEAD_SYNC_INTERVAL_MS) {
         LAST_LEAD_AUTO_SYNC.set(String(companyId), Date.now());
+        const compFilter = mongoose.isValidObjectId(companyId)
+            ? { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] }
+            : String(companyId);
+
         Promise.all([
             Lead.updateMany(
                 {
-                    company: companyId,
-                    status: { $nin: ['Confirmed', 'Lost'] },
-                    bookingId: null,
+                    company: compFilter,
+                    status: { $nin: ['Confirmed', 'Completed', 'Converted', 'Lost'] },
+                    bookingId: { $in: [null, ''] },
                     notes: { $not: /Restored from Lost|Reopened to Active/i },
                     $or: [
                         { status: 'Cancelled' },
-                        { travelEndDate: { $lt: today } },
-                        { travelEndDate: null, travelStartDate: { $lt: today } }
+                        { travelStartDate: { $lt: today } },
+                        { travelEndDate: { $lte: today } }
                     ]
                 },
                 {
@@ -57,7 +61,7 @@ const getLeads = asyncHandler(async (req, res) => {
             ),
             Lead.updateMany(
                 {
-                    company: companyId,
+                    company: compFilter,
                     status: 'Cancelled',
                     priority: { $ne: 'Lost' }
                 },
@@ -106,12 +110,21 @@ const getLeads = asyncHandler(async (req, res) => {
             l.status = 'Lost';
             l.priority = 'Lost';
         } else if (l.status !== 'Confirmed' && l.status !== 'Lost' && !l.bookingId && !restoreRegex.test(l.notes || '')) {
-            const endOrStart = l.travelEndDate ? new Date(l.travelEndDate) : (l.travelStartDate ? new Date(l.travelStartDate) : null);
-            if (endOrStart && endOrStart < today) {
+            const startDate = l.travelStartDate ? new Date(l.travelStartDate) : null;
+            const endDate = l.travelEndDate ? new Date(l.travelEndDate) : null;
+            if (startDate) startDate.setHours(0, 0, 0, 0);
+            if (endDate) endDate.setHours(0, 0, 0, 0);
+            const isPassed = (startDate && startDate < today) || (endDate && endDate <= today);
+            if (isPassed) {
                 l.status = 'Lost';
                 l.priority = 'Lost';
             }
         }
+    }
+
+    // If caller asked for a specific non-Lost status (e.g. New, Follow-up), filter out any lead that expired to Lost
+    if (status && status !== 'All' && status !== 'Lost') {
+        leads = leads.filter(l => l.status === status);
     }
 
     // Month filter (e.g. 'Apr', 'May', '04', '05')

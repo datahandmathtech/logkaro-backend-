@@ -454,6 +454,9 @@ const deleteBankTransaction = asyncHandler(async (req, res) => {
                 } else {
                     booking.advancePaid = (booking.advancePaid || 0) + tx.amount;
                 }
+                const payFuelDed = (booking.guestFuelFilled || Number(booking.guestFuelAmount) > 0) ? (Number(booking.guestFuelAmount) || 0) : 0;
+                booking.balanceDue = Math.max(0, (Number(booking.totalAmount) || 0) - booking.advancePaid - payFuelDed);
+                booking.paymentStatus = booking.balanceDue <= 0 ? 'Full Received' : (booking.advancePaid > 0 ? 'Partial' : 'No Advance');
                 booking.notes = (booking.notes || '') + `\n[System]: Payment of ${tx.amount} deleted from Bank Book on ${new Date().toLocaleDateString()}.`;
                 await booking.save();
             }

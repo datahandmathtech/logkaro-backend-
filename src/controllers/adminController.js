@@ -1946,9 +1946,10 @@ const getDailyReports = asyncHandler(async (req, res) => {
                 amount: totalFuel,
                 liters: totalFuelQty,
                 avgMileage: dutyAverage,
-                entries: a.fuel?.entries?.length
-                    ? a.fuel.entries
-                    : matchedFuels.map(f => ({ amount: f.amount, fuelType: f.fuelType, km: f.odometer, quantity: f.quantity }))
+                odometer: (matchedFuels.find(f => f.odometer)?.odometer) || (a.fuel?.entries?.find(e => e.km)?.km) || a.fuel?.km || null,
+                entries: matchedFuels.length > 0
+                    ? matchedFuels.map(f => ({ amount: f.amount, fuelType: f.fuelType, km: f.odometer, odometer: f.odometer, quantity: f.quantity }))
+                    : (a.fuel?.entries || []).map(e => ({ ...e, km: e.km || e.odometer }))
             },
             punchOut: a.punchOut
                 ? { ...a.punchOut, tollParkingAmount: totalParking }
