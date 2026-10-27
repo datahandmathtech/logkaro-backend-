@@ -17,6 +17,7 @@ const isCashMode = (paymentMode, bankAccountId) => {
     if (bankAccountId) return false;
     if (!paymentMode) return true;
     const mode = String(paymentMode).toLowerCase();
+    if (mode === 'others' || mode === 'other' || mode.includes('personal') || mode.includes('guest')) return false;
     return mode.includes('cash') || mode === 'cash in hand' || mode === 'driver cash' || mode === 'cash to company';
 };
 
@@ -49,8 +50,14 @@ const recordFinancialTransaction = async ({
         if (isNaN(numAmount) || numAmount <= 0) return null;
         if (!companyId) return null;
 
-        // If paid by Guest, do not deduct from Company cash/bank
-        if (paidBy === 'Guest') return null;
+        // If paid by Guest or Others/Personal, do not deduct from Company cash/bank
+        const pBy = String(paidBy || '').toLowerCase();
+        const pMode = String(paymentMode || '').toLowerCase();
+        if (pBy === 'guest' || pBy === 'others' || pBy === 'other' || pBy.includes('personal') ||
+            pMode === 'others' || pMode === 'other' || pMode.includes('personal') || pMode.includes('guest')) {
+            console.log(`[transactionSync] Skipping cash/bank deduction for ${sourceType} (${sourceId}) - paid by: ${paidBy}, mode: ${paymentMode}`);
+            return null;
+        }
 
         const txDate = date ? new Date(date) : new Date();
         const effectiveUserId = user?._id || user || null;

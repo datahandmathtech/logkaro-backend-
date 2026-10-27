@@ -2190,7 +2190,8 @@ const addBorderTax = asyncHandler(async (req, res) => {
 
     const receiptPhoto = req.file ? req.file.path.replace(/\\/g, '/') : null;
     const numAmount = Number(amount);
-    const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
+    const isOtherTax = paymentMode === 'Others' || paymentMode === 'Other' || String(paymentMode || '').toLowerCase().includes('personal') || paidBy === 'Others' || paymentSource === 'Others';
+    const effectivePaidBy = (paymentSource === 'Guest' || paidBy === 'Guest') ? 'Guest' : (isOtherTax ? 'Others' : (paidBy || 'Company'));
     const cleanDriverId = (driverId && typeof driverId === 'string' && driverId.trim() !== '' && driverId !== 'undefined' && driverId !== 'null' && mongoose.Types.ObjectId.isValid(driverId.trim())) ? driverId.trim() : null;
 
     const entry = await BorderTax.create({
@@ -2338,7 +2339,8 @@ const rechargeFastag = asyncHandler(async (req, res) => {
 
     const rechargeAmount = Number(amount);
     const compId = companyId || vehicle.company;
-    const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
+    const isOtherFastag = method === 'Others' || method === 'Other' || String(method || '').toLowerCase().includes('personal') || paidBy === 'Others' || paymentSource === 'Others';
+    const effectivePaidBy = (paymentSource === 'Guest' || paidBy === 'Guest') ? 'Guest' : (isOtherFastag ? 'Others' : (paidBy || 'Company'));
 
     // Update balance and history
     let receiptUrl = '';
@@ -2485,7 +2487,7 @@ const updateFastagRecharge = asyncHandler(async (req, res) => {
         reference: historyEntry.remarks || '',
         receiptPhoto: historyEntry.receiptPhoto || '',
         user: req.user?._id,
-        paidBy: req.body.paidBy || 'Company'
+        paidBy: (req.body.paidBy === 'Guest' || req.body.paymentSource === 'Guest') ? 'Guest' : ((historyEntry.method === 'Others' || historyEntry.method === 'Other' || String(historyEntry.method || '').toLowerCase().includes('personal') || req.body.paidBy === 'Others') ? 'Others' : (req.body.paidBy || 'Company'))
     });
 
     res.json({ message: 'Fastag entry updated', newBalance: vehicle.fastagBalance });
@@ -3252,9 +3254,10 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
     let guestName = norm(req.body.guestName);
 
     const numAmount = Number(amount) || 0;
-    const effectivePaidBy = paidBy || (paymentSource === 'Guest' ? 'Guest' : 'Company');
-    const validPaymentModes = ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'];
-    const safePaymentMode = validPaymentModes.includes(paymentMode) ? paymentMode : 'Cash';
+    const isOtherMode = paymentMode === 'Others' || paymentMode === 'Other' || String(paymentMode || '').toLowerCase().includes('personal') || String(paidBy || '').toLowerCase().includes('other');
+    const effectivePaidBy = (paymentSource === 'Guest' || paidBy === 'Guest') ? 'Guest' : (isOtherMode || paidBy === 'Others' || paymentSource === 'Others') ? 'Others' : (paidBy || 'Company');
+    const validPaymentModes = ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other', 'Others', 'Others / Personal'];
+    const safePaymentMode = validPaymentModes.includes(paymentMode) ? paymentMode : (isOtherMode ? 'Others' : 'Cash');
     const cleanDriverId = (driverId && typeof driverId === 'string' && driverId.trim() !== '' && driverId !== 'undefined' && driverId !== 'null' && mongoose.Types.ObjectId.isValid(driverId.trim())) ? driverId.trim() : null;
 
     let parsedPartsChanged = [];
@@ -3606,7 +3609,7 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
     let driverId = norm(req.body.driverId);
     let bankAccountId = norm(req.body.bankAccountId);
 
-    const validPaymentModes = ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'];
+    const validPaymentModes = ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other', 'Others', 'Others / Personal'];
 
     if (docType === 'maintenance') {
         if (vehicleId) targetDoc.vehicle = vehicleId;
@@ -3648,6 +3651,8 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
             });
         } else {
             const veh = await Vehicle.findById(updated.vehicle);
+            const isOthers = updated.paymentMode === 'Others' || updated.paymentMode === 'Other' || updated.paymentSource === 'Others' || String(updated.paymentMode || '').toLowerCase().includes('personal');
+            const effectivePaidBy = updated.paymentSource === 'Guest' ? 'Guest' : (isOthers ? 'Others' : 'Company');
             await updateFinancialTransaction({
                 companyId: updated.company,
                 sourceId: updated._id,
@@ -3662,7 +3667,7 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
                 reference: updated.billNumber || '',
                 receiptPhoto: updated.billPhoto || '',
                 user: req.user?._id,
-                paidBy: updated.paymentSource === 'Guest' ? 'Guest' : 'Company'
+                paidBy: effectivePaidBy
             });
         }
 
@@ -4114,7 +4119,8 @@ const addFuelEntry = asyncHandler(async (req, res) => {
     });
 
     // 1. By Company Deduction (Cash vs Bank)
-    const effectivePaidBy = (paymentSource === 'Guest' || paymentBy === 'Guest') ? 'Guest' : 'Company';
+    const isOtherFuel = paymentSource === 'Others' || paymentBy === 'Others' || paymentMode === 'Others' || paymentMode === 'Other' || String(paymentMode || '').toLowerCase().includes('personal');
+    const effectivePaidBy = (paymentSource === 'Guest' || paymentBy === 'Guest') ? 'Guest' : (isOtherFuel ? 'Others' : 'Company');
     if (effectivePaidBy === 'Company') {
         const veh = await Vehicle.findById(vehicleId);
         await recordFinancialTransaction({
@@ -4286,7 +4292,8 @@ const updateFuelEntry = asyncHandler(async (req, res) => {
     await recalculateFuelMetrics(entry.vehicle);
 
     const veh = await Vehicle.findById(entry.vehicle);
-    const effectivePaidBy = (entry.paymentSource === 'Guest' || entry.paymentBy === 'Guest') ? 'Guest' : 'Company';
+    const isOtherFuel = entry.paymentSource === 'Others' || entry.paymentBy === 'Others' || entry.paymentMode === 'Others' || entry.paymentMode === 'Other' || String(entry.paymentMode || '').toLowerCase().includes('personal') || req.body.paymentMode === 'Others';
+    const effectivePaidBy = (entry.paymentSource === 'Guest' || entry.paymentBy === 'Guest') ? 'Guest' : (isOtherFuel ? 'Others' : 'Company');
     await updateFinancialTransaction({
         companyId: entry.company,
         sourceId: entry._id,
@@ -4877,8 +4884,9 @@ const addAdvance = asyncHandler(async (req, res) => {
         return res.status(404).json({ message: 'Recipient not found' });
     }
 
-    const effectivePaidBy = paidBy || (givenBy === 'Guest' ? 'Guest' : 'Company');
     const numAmount = Number(amount);
+    const isOtherAdvance = paymentMode === 'Others' || paymentMode === 'Other' || String(paymentMode || '').toLowerCase().includes('personal') || paidBy === 'Others' || givenBy === 'Others';
+    const effectivePaidBy = (paidBy === 'Guest' || givenBy === 'Guest') ? 'Guest' : (isOtherAdvance ? 'Others' : (paidBy || 'Company'));
 
     const advDate = date ? new Date(date) : new Date();
     const effectiveMonth = month ? parseInt(month, 10) : (advDate.getMonth() + 1);
@@ -5205,6 +5213,9 @@ const updateAdvance = asyncHandler(async (req, res) => {
             console.error('Advance recipient lookup failed:', popErr.message);
         }
 
+        const isOtherAdvance = updatedAdvance.paymentMode === 'Others' || updatedAdvance.paymentMode === 'Other' || String(updatedAdvance.paymentMode || '').toLowerCase().includes('personal') || updatedAdvance.paidBy === 'Others' || updatedAdvance.givenBy === 'Others';
+        const effectivePaidBy = (updatedAdvance.paidBy === 'Guest' || updatedAdvance.givenBy === 'Guest') ? 'Guest' : (isOtherAdvance ? 'Others' : (updatedAdvance.paidBy || 'Company'));
+
         await updateFinancialTransaction({
             companyId: updatedAdvance.company,
             sourceId: updatedAdvance._id,
@@ -5212,14 +5223,14 @@ const updateAdvance = asyncHandler(async (req, res) => {
             amount: updatedAdvance.amount,
             date: updatedAdvance.date,
             paymentMode: updatedAdvance.paymentMode,
-            bankAccountId: updatedAdvance.paidBy === 'Company' ? updatedAdvance.bankAccount : null,
+            bankAccountId: effectivePaidBy === 'Company' ? updatedAdvance.bankAccount : null,
             type: 'OUT',
             category: isStaff ? 'Staff Advance' : 'Driver Advance',
             description: `Advance given to ${isStaff ? 'Staff' : 'Driver'}${recipientName ? ` ${recipientName}` : ''} (${monthLabel} ${updatedAdvance.year || ''} Hisab) - ${updatedAdvance.remark || ''}`,
             driverRef: recipientRefId,
             reference: updatedAdvance.paymentReference || '',
             user: req.user?._id,
-            paidBy: updatedAdvance.paidBy || 'Company'
+            paidBy: effectivePaidBy
         });
 
         res.json(updatedAdvance);
@@ -8522,7 +8533,7 @@ const updateBorderTax = asyncHandler(async (req, res) => {
             reference: updatedEntry.borderName,
             receiptPhoto: updatedEntry.receiptPhoto || '',
             user: req.user?._id,
-            paidBy: req.body.paidBy || 'Company'
+            paidBy: (req.body.paidBy === 'Guest' || req.body.paymentSource === 'Guest') ? 'Guest' : ((req.body.paymentMode === 'Others' || req.body.paymentMode === 'Other' || String(req.body.paymentMode || '').toLowerCase().includes('personal') || req.body.paidBy === 'Others') ? 'Others' : (req.body.paidBy || 'Company'))
         });
 
         res.json(updatedEntry);
@@ -8590,6 +8601,200 @@ const getUniqueGarages = asyncHandler(async (req, res) => {
     
     res.json(unique);
 });
+
+// @desc    Get vendor-wise maintenance summary (total billed, paid, due, bills)
+// @route   GET /api/admin/maintenance/vendor-summary/:companyId
+// @access  Private/Admin
+const getMaintenanceVendorSummary = asyncHandler(async (req, res) => {
+    const { companyId } = req.params;
+    const finalCompanyId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company || companyId;
+    const { month, year, startDate, endDate, allTime } = req.query;
+
+    let query = {
+        $or: [
+            { company: new mongoose.Types.ObjectId(finalCompanyId) },
+            { company: finalCompanyId }
+        ]
+    };
+
+    if (allTime !== 'true') {
+        if (startDate && endDate) {
+            const start = new Date(startDate);
+            const end = new Date(new Date(endDate).setHours(23, 59, 59, 999));
+            query.billDate = { $gte: start, $lte: end };
+        } else if (year && year !== 'All') {
+            if (month && month !== 'All') {
+                const startOfMonth = new Date(parseInt(year), parseInt(month) - 1, 1);
+                const endOfMonth = new Date(parseInt(year), parseInt(month), 0);
+                endOfMonth.setHours(23, 59, 59, 999);
+                query.billDate = { $gte: startOfMonth, $lte: endOfMonth };
+            } else {
+                const startOfYear = new Date(parseInt(year), 3, 1);
+                const endOfYear = new Date(parseInt(year) + 1, 2, 31, 23, 59, 59, 999);
+                query.billDate = { $gte: startOfYear, $lte: endOfYear };
+            }
+        }
+    }
+
+    const records = await Maintenance.find(query)
+        .populate('vehicle', 'carNumber model')
+        .populate('driver', 'name')
+        .populate('bankAccount', 'accountName bankName accountNumber')
+        .sort({ billDate: -1 })
+        .lean();
+
+    const vendorMap = {};
+    let grandTotal = 0;
+    let grandPaid = 0;
+    let grandDue = 0;
+
+    records.forEach(r => {
+        const rawName = (r.garageName || 'Unknown Vendor').trim();
+        const vendorKey = rawName.toLowerCase();
+
+        if (!vendorMap[vendorKey]) {
+            vendorMap[vendorKey] = {
+                vendorName: rawName,
+                totalAmount: 0,
+                paidAmount: 0,
+                dueAmount: 0,
+                totalBills: 0,
+                dueBillsCount: 0,
+                paidBillsCount: 0,
+                vehicles: new Set(),
+                latestDate: null,
+                bills: []
+            };
+        }
+
+        const amt = Number(r.amount) || 0;
+        const isDue = r.paymentStatus === 'Due';
+
+        vendorMap[vendorKey].totalAmount += amt;
+        vendorMap[vendorKey].totalBills += 1;
+        grandTotal += amt;
+
+        if (isDue) {
+            vendorMap[vendorKey].dueAmount += amt;
+            vendorMap[vendorKey].dueBillsCount += 1;
+            grandDue += amt;
+        } else {
+            vendorMap[vendorKey].paidAmount += amt;
+            vendorMap[vendorKey].paidBillsCount += 1;
+            grandPaid += amt;
+        }
+
+        if (r.vehicle?.carNumber) {
+            vendorMap[vendorKey].vehicles.add(r.vehicle.carNumber);
+        }
+
+        if (!vendorMap[vendorKey].latestDate || new Date(r.billDate) > new Date(vendorMap[vendorKey].latestDate)) {
+            vendorMap[vendorKey].latestDate = r.billDate;
+        }
+
+        vendorMap[vendorKey].bills.push({
+            _id: r._id,
+            billDate: r.billDate,
+            billNumber: r.billNumber,
+            amount: amt,
+            paymentStatus: r.paymentStatus || 'Paid',
+            paymentMode: r.paymentMode,
+            paymentSource: r.paymentSource,
+            bankAccount: r.bankAccount,
+            vehicle: r.vehicle,
+            driver: r.driver,
+            maintenanceType: r.maintenanceType,
+            category: r.category,
+            description: r.description,
+            billPhoto: r.billPhoto,
+            currentKm: r.currentKm
+        });
+    });
+
+    const vendors = Object.values(vendorMap).map(v => ({
+        ...v,
+        vehicles: Array.from(v.vehicles)
+    })).sort((a, b) => b.dueAmount - a.dueAmount || b.totalAmount - a.totalAmount);
+
+    res.json({
+        summary: {
+            totalAmount: grandTotal,
+            paidAmount: grandPaid,
+            dueAmount: grandDue,
+            totalVendors: vendors.length,
+            dueVendorsCount: vendors.filter(v => v.dueAmount > 0).length,
+            paidVendorsCount: vendors.filter(v => v.dueAmount === 0).length
+        },
+        vendors
+    });
+});
+
+// @desc    Settle all or specific due bills for a vendor in maintenance
+// @route   POST /api/admin/maintenance/settle-vendor
+// @access  Private/Admin
+const settleVendorDues = asyncHandler(async (req, res) => {
+    const { companyId, vendorName, billIds, paymentMode, bankAccountId, paidBy, paymentDate } = req.body;
+    const finalCompanyId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company || companyId;
+
+    let query = {
+        company: finalCompanyId,
+        paymentStatus: 'Due'
+    };
+    if (billIds && Array.isArray(billIds) && billIds.length > 0) {
+        query._id = { $in: billIds };
+    } else if (vendorName) {
+        query.garageName = new RegExp(`^${vendorName.trim()}$`, 'i');
+    }
+
+    const dueRecords = await Maintenance.find(query);
+    if (!dueRecords.length) {
+        return res.status(400).json({ message: 'No due records found for this vendor' });
+    }
+
+    const safePaymentMode = paymentMode || 'Cash';
+    const isOtherMode = safePaymentMode === 'Others' || safePaymentMode === 'Other' || String(safePaymentMode).toLowerCase().includes('personal');
+    const effectivePaidBy = isOtherMode ? 'Others' : (paidBy || 'Company');
+    const effectiveDate = paymentDate || new Date();
+
+    const updatedRecords = [];
+    for (const record of dueRecords) {
+        record.paymentStatus = 'Paid';
+        record.paymentMode = safePaymentMode;
+        if (bankAccountId && !isOtherMode && safePaymentMode !== 'Cash') {
+            record.bankAccount = bankAccountId;
+        } else {
+            record.bankAccount = null;
+        }
+        await record.save();
+
+        if (effectivePaidBy === 'Company') {
+            const veh = await Vehicle.findById(record.vehicle);
+            await recordFinancialTransaction({
+                companyId: finalCompanyId,
+                sourceId: record._id,
+                sourceType: 'Maintenance',
+                amount: record.amount,
+                date: effectiveDate,
+                paymentMode: safePaymentMode,
+                bankAccountId: record.bankAccount,
+                type: 'OUT',
+                category: 'Vehicle Maintenance',
+                description: `Maintenance Settlement (${record.garageName || 'Vendor'}) for Vehicle ${veh?.carNumber || ''}`,
+                reference: record.billNumber || '',
+                user: req.user?._id,
+                paidBy: 'Company'
+            });
+        }
+        updatedRecords.push(record._id);
+    }
+
+    res.json({
+        success: true,
+        settledCount: updatedRecords.length,
+        message: `Successfully settled ${updatedRecords.length} due bill(s)`
+    });
+});
+
 // @desc    Get live GPS locations of vehicles (Dummy Data for Map)
 // @route   GET /api/admin/live-map/:companyId
 // @access  Private/Admin
@@ -8651,6 +8856,8 @@ module.exports = { getDriverSalarySummaryInternal,
     getLiveMap,
     resolveAirCheck,
     getUniqueGarages,
+    getMaintenanceVendorSummary,
+    settleVendorDues,
     markSalaryAsPaid,
     getSalaryPayments,
     createDriver,

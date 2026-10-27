@@ -73,6 +73,8 @@ const {
     updateAttendance,
     updateMaintenanceRecord,
     getUniqueGarages,
+    getMaintenanceVendorSummary,
+    settleVendorDues,
     updateStaff,
     getPendingLeaveRequests,
     getAllLeaveRequests,
@@ -150,6 +152,8 @@ const freelancerUpload = upload.fields([
 router.post('/freelancers/punch-in', adminOrExecutive, checkCompany, freelancerUpload, freelancerPunchIn);
 router.post('/freelancers/punch-out', adminOrExecutive, checkCompany, freelancerUpload, freelancerPunchOut);
 router.get('/maintenance/garages/:companyId', adminOrExecutive, checkCompany, getUniqueGarages);
+router.get('/maintenance/vendor-summary/:companyId', adminOrExecutive, checkCompany, getMaintenanceVendorSummary);
+router.post('/maintenance/settle-vendor', adminOrExecutive, checkCompany, settleVendorDues);
 router.get('/maintenance/:companyId', adminOrExecutive, checkCompany, getMaintenanceRecords);
 router.get('/maintenance/pending/:companyId', adminOrExecutive, checkCompany, getPendingMaintenanceExpenses);
 router.post('/maintenance', adminOrExecutive, checkCompany, upload.single('billPhoto'), addMaintenanceRecord);

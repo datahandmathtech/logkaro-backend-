@@ -36,7 +36,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     paymentMode: {
         type: String,
-        enum: ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other'],
+        enum: ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other', 'Others', 'Others / Personal'],
         default: 'Cash'
     },
     bankAccount: {
@@ -50,7 +50,7 @@ const maintenanceSchema = new mongoose.Schema({
     },
     paymentSource: {
         type: String,
-        enum: ['Office', 'Guest', 'Main Office', 'Paid'],
+        enum: ['Office', 'Guest', 'Main Office', 'Paid', 'Others', 'Other'],
         default: 'Office'
     },
     currentKm: Number,

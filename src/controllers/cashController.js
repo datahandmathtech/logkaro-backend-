@@ -72,7 +72,8 @@ const getCashTransactions = asyncHandler(async (req, res) => {
     const [transactions, priorAgg, company] = await Promise.all([
         CashTransaction.find(query)
             .populate('bankAccount', 'bankName accountNumber')
-            .populate('bookingRef', 'bookingId clientCode clientName')
+            .populate('bookingRef', 'bookingId clientCode clientName travelStartDate travelEndDate itinerary')
+            .populate('leadRef', 'leadId clientCode clientName travelStartDate travelEndDate')
             .populate('driverRef', 'name mobile')
             .populate('createdBy', 'name')
             .sort({ date: -1, createdAt: -1 })

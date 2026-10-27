@@ -122,3 +122,70 @@
 [2026-10-26T06:35:45.732Z] CRON: Cron Jobs Initialized
 [2026-10-26T06:38:17.137Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-10-26T06:47:59.497Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:12:39.838Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:30:21.232Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:01.023Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:09.517Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:15.100Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:32.846Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:42.378Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:52.032Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:48:58.029Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:49:05.533Z] Login attempt started
+[2026-10-27T08:49:05.534Z] Login request for: Kavishuser1
+[2026-10-27T08:49:05.604Z] User found: Yatree (Role: Admin)
+[2026-10-27T08:49:09.236Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:49:14.843Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:49:33.004Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:49:42.308Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:49:47.376Z] CRON: Cron Jobs Initialized
+[2026-10-27T08:50:53.277Z] Login attempt started
+[2026-10-27T08:50:53.278Z] Login request for: Kavishuser1
+[2026-10-27T08:50:53.356Z] User found: Yatree (Role: Admin)
+[2026-10-27T08:50:53.464Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-27T08:50:53.465Z] Password matched
+[2026-10-27T08:50:53.465Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-27T08:51:02.871Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:51:02.875Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:51:02.887Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"createdAt":{"$gte":"2026-04-01T00:00:00.000Z","$lte":"2027-03-31T23:59:59.000Z"},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:51:52.710Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:51:52.980Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:51:56.489Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443"}
+[2026-10-27T08:52:00.573Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:52:22.218Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:52:22.256Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-27T08:52:22.462Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:52:51.078Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:52:51.091Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-27T08:56:35.909Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T08:59:36.953Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:05:31.696Z] CRON: Cron Jobs Initialized
+[2026-10-27T09:05:39.101Z] CRON: Cron Jobs Initialized
+[2026-10-27T09:05:57.991Z] CRON: Cron Jobs Initialized
+[2026-10-27T09:08:48.732Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:10:54.603Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:11:19.386Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:11:38.857Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:12:25.690Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:12:38.058Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:13:54.002Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:14:10.333Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:14:16.962Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443"}
+[2026-10-27T09:14:47.228Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:17:05.632Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:17:25.386Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:18:01.006Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:20:21.082Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:20:22.012Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:21:01.809Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:21:03.746Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:21:17.948Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:21:19.339Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-27T09:22:21.520Z] GLOBAL_ERROR: Connection to ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017 interrupted due to server monitor timeout - Stack: PoolClearedOnNetworkError: Connection to ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017 interrupted due to server monitor timeout
+    at ConnectionPool.interruptInUseConnections (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:253:36)
+    at E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:241:41
+    at process.processTicksAndRejections (node:internal/process/task_queues:85:11)
+[2026-10-27T09:22:22.287Z] GLOBAL_ERROR: Connection to ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017 interrupted due to server monitor timeout - Stack: PoolClearedOnNetworkError: Connection to ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017 interrupted due to server monitor timeout
+    at ConnectionPool.interruptInUseConnections (E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:253:36)
+    at E:\New folder\Master-Server\TEXI\yatree-backend\node_modules\mongodb\lib\cmap\connection_pool.js:241:41
+    at process.processTicksAndRejections (node:internal/process/task_queues:85:11)
