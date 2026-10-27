@@ -5243,13 +5243,17 @@ const updateAdvance = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/allowances
 // @access  Private/Admin
 const addAllowance = asyncHandler(async (req, res) => {
-    const { driverId, amount, date, remark, type } = req.body;
+    const { driverId, amount, date, remark, type, paymentMode, bankAccountId, paidBy } = req.body;
     const companyId = req.headers['x-company-id'] || req.user.company;
 
     if (!driverId || !amount) {
         res.status(400);
         throw new Error('Driver and amount are required');
     }
+
+    const isOthers = paymentMode === 'Others' || paymentMode === 'Other' || paidBy === 'Others' || String(paymentMode || '').toLowerCase().includes('personal');
+    const effectivePaidBy = isOthers ? 'Others' : (paidBy || 'Company');
+    const effectivePaymentMode = isOthers ? 'Others' : (paymentMode || (bankAccountId ? 'Bank Transfer' : 'Cash'));
 
     const allowance = await Allowance.create({
         driver: driverId,
@@ -5258,27 +5262,32 @@ const addAllowance = asyncHandler(async (req, res) => {
         date: date || new Date(),
         remark: remark || 'Special Allowance',
         type: type || 'Other',
+        paymentMode: effectivePaymentMode,
+        paidBy: effectivePaidBy,
+        bankAccount: (effectivePaidBy === 'Company' && bankAccountId) ? bankAccountId : null,
         createdBy: req.user._id
     });
 
-    const driverDoc = await User.findById(driverId);
-    await recordFinancialTransaction({
-        companyId,
-        sourceId: allowance._id,
-        sourceType: 'Allowance',
-        amount: Number(amount),
-        date: allowance.date,
-        paymentMode: req.body.paymentMode || 'Cash',
-        bankAccountId: req.body.bankAccountId || null,
-        type: 'OUT',
-        category: 'Driver Allowance',
-        description: `Allowance (${allowance.type || 'Other'}) for Driver ${driverDoc?.name || ''} - ${allowance.remark || ''}`,
-        driverRef: driverId,
-        driverName: driverDoc?.name || '',
-        reference: allowance.remark || '',
-        user: req.user?._id,
-        paidBy: 'Company'
-    });
+    if (effectivePaidBy === 'Company') {
+        const driverDoc = await User.findById(driverId);
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: allowance._id,
+            sourceType: 'Allowance',
+            amount: Number(amount),
+            date: allowance.date,
+            paymentMode: effectivePaymentMode,
+            bankAccountId: (effectivePaymentMode !== 'Cash' && bankAccountId) ? bankAccountId : null,
+            type: 'OUT',
+            category: 'Driver Allowance',
+            description: `Allowance (${allowance.type || 'Other'}) for Driver ${driverDoc?.name || ''} - ${allowance.remark || ''}`,
+            driverRef: driverId,
+            driverName: driverDoc?.name || '',
+            reference: allowance.remark || '',
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+    }
 
     res.status(201).json(allowance);
 });
@@ -5302,7 +5311,10 @@ const getAllowances = asyncHandler(async (req, res) => {
         query.date = { $gte: start, $lte: end };
     }
 
-    const allowances = await Allowance.find(query).populate('driver', 'name mobile driverType status isFreelancer').sort({ date: -1 });
+    const allowances = await Allowance.find(query)
+        .populate('driver', 'name mobile driverType status isFreelancer')
+        .populate('bankAccount', 'bankName accountNumber')
+        .sort({ date: -1 });
     res.json(allowances);
 });
 
@@ -8440,12 +8452,20 @@ const getLiveFeed = asyncHandler(async (req, res) => {
 
 const getAllLoans = asyncHandler(async (req, res) => {
     const { companyId } = req.params;
-    const loans = await Loan.find({ company: companyId }).populate('driver', 'name mobile driverType status isFreelancer').sort({ createdAt: -1 });
+    const loans = await Loan.find({ company: companyId })
+        .populate('driver', 'name mobile driverType status isFreelancer')
+        .populate('bankAccount', 'bankName accountNumber')
+        .sort({ createdAt: -1 });
     res.json(loans);
 });
 
 const createLoan = asyncHandler(async (req, res) => {
-    const { driverId, companyId, totalAmount, monthlyEMI, tenureMonths, startDate, remarks } = req.body;
+    const { driverId, companyId, totalAmount, monthlyEMI, tenureMonths, startDate, remarks, paymentMode, bankAccountId, paidBy } = req.body;
+    
+    const isOthers = paymentMode === 'Others' || paymentMode === 'Other' || paidBy === 'Others' || String(paymentMode || '').toLowerCase().includes('personal');
+    const effectivePaidBy = isOthers ? 'Others' : (paidBy || 'Company');
+    const effectivePaymentMode = isOthers ? 'Others' : (paymentMode || (bankAccountId ? 'Bank Transfer' : 'Cash'));
+
     const loan = new Loan({
         driver: driverId,
         company: companyId,
@@ -8455,9 +8475,34 @@ const createLoan = asyncHandler(async (req, res) => {
         remainingAmount: Number(totalAmount),
         startDate: startDate || new Date(),
         remarks,
+        paymentMode: effectivePaymentMode,
+        paidBy: effectivePaidBy,
+        bankAccount: (effectivePaidBy === 'Company' && bankAccountId) ? bankAccountId : null,
         createdBy: req.user._id
     });
     await loan.save();
+
+    if (effectivePaidBy === 'Company') {
+        const driverDoc = await User.findById(driverId);
+        await recordFinancialTransaction({
+            companyId,
+            sourceId: loan._id,
+            sourceType: 'Loan',
+            amount: Number(totalAmount),
+            date: startDate || loan.startDate,
+            paymentMode: effectivePaymentMode,
+            bankAccountId: (effectivePaymentMode !== 'Cash' && bankAccountId) ? bankAccountId : null,
+            type: 'OUT',
+            category: 'Driver Loan',
+            description: `Driver Loan disbursed to ${driverDoc?.name || 'Driver'} (Tenure: ${loan.tenureMonths} mos, EMI: ₹${loan.monthlyEMI}) - ${remarks || ''}`,
+            driverRef: driverId,
+            driverName: driverDoc?.name || '',
+            reference: remarks || '',
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+    }
+
     DASHBOARD_CACHE.clear(); // Important: Clear cache so salary summaries reflect the new loan immediately
     res.status(201).json(loan);
 });
@@ -8483,6 +8528,7 @@ const updateLoan = asyncHandler(async (req, res) => {
 const deleteLoan = asyncHandler(async (req, res) => {
     const loan = await Loan.findById(req.params.id);
     if (!loan) return res.status(404).json({ message: 'Loan not found' });
+    await removeFinancialTransaction({ sourceId: loan._id });
     await loan.deleteOne();
     DASHBOARD_CACHE.clear();
     res.json({ message: 'Loan removed' });
@@ -8795,6 +8841,65 @@ const settleVendorDues = asyncHandler(async (req, res) => {
     });
 });
 
+// @desc    Get fast lightweight maintenance master data for vehicles (High Performance for Master tab)
+// @route   GET /api/admin/maintenance/master-fleet/:companyId
+// @access  Private/Admin
+const getMaintenanceMasterFleet = asyncHandler(async (req, res) => {
+    const { companyId } = req.params;
+    const finalCompanyId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company || companyId;
+    const { year } = req.query;
+    const y = parseInt(year) || 2026;
+
+    const startDate = new Date(y, 3, 1);
+    const endDate = new Date(y + 1, 2, 31, 23, 59, 59, 999);
+
+    const companyQuery = {
+        $or: [
+            { company: new mongoose.Types.ObjectId(finalCompanyId) },
+            { company: finalCompanyId }
+        ]
+    };
+
+    // 1. Fetch only fleet vehicles (carNumber and model)
+    const vehicles = await Vehicle.find({
+        ...companyQuery,
+        isOutsideCar: { $ne: true },
+        status: { $ne: 'inactive' }
+    }).select('carNumber model').sort({ carNumber: 1 }).lean();
+
+    // 2. Fetch only maintenance records for this FY
+    const records = await Maintenance.find({
+        ...companyQuery,
+        billDate: { $gte: startDate, $lte: endDate }
+    }).select('_id vehicle amount maintenanceType category description billDate garageName paymentStatus').lean();
+
+    // 3. Map records to each vehicle
+    const vehicleRecordsMap = {};
+    for (const r of records) {
+        const vId = (r.vehicle?._id || r.vehicle || '').toString();
+        if (vId) {
+            if (!vehicleRecordsMap[vId]) {
+                vehicleRecordsMap[vId] = [];
+            }
+            vehicleRecordsMap[vId].push(r);
+        }
+    }
+
+    const resultVehicles = vehicles.map(v => {
+        const vId = v._id.toString();
+        return {
+            _id: v._id,
+            carNumber: v.carNumber,
+            model: v.model,
+            maintenance: {
+                records: vehicleRecordsMap[vId] || []
+            }
+        };
+    });
+
+    res.json({ vehicles: resultVehicles });
+});
+
 // @desc    Get live GPS locations of vehicles (Dummy Data for Map)
 // @route   GET /api/admin/live-map/:companyId
 // @access  Private/Admin
@@ -8858,6 +8963,7 @@ module.exports = { getDriverSalarySummaryInternal,
     getUniqueGarages,
     getMaintenanceVendorSummary,
     settleVendorDues,
+    getMaintenanceMasterFleet,
     markSalaryAsPaid,
     getSalaryPayments,
     createDriver,

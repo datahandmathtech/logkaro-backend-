@@ -45,6 +45,18 @@ const loanSchema = new mongoose.Schema({
     remarks: {
         type: String
     },
+    paymentMode: {
+        type: String,
+        default: 'Cash'
+    },
+    paidBy: {
+        type: String,
+        default: 'Company'
+    },
+    bankAccount: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankAccount'
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

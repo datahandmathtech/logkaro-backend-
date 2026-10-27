@@ -25,8 +25,20 @@ const allowanceSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['Office Work', 'Wedding', 'Bonus', 'Other'],
+        enum: ['Office Work', 'Wedding', 'Bonus', 'Other', 'Repair Help'],
         default: 'Other'
+    },
+    paymentMode: {
+        type: String,
+        default: 'Cash'
+    },
+    paidBy: {
+        type: String,
+        default: 'Company'
+    },
+    bankAccount: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankAccount'
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,

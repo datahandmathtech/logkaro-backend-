@@ -75,6 +75,7 @@ const {
     getUniqueGarages,
     getMaintenanceVendorSummary,
     settleVendorDues,
+    getMaintenanceMasterFleet,
     updateStaff,
     getPendingLeaveRequests,
     getAllLeaveRequests,
@@ -153,6 +154,7 @@ router.post('/freelancers/punch-in', adminOrExecutive, checkCompany, freelancerU
 router.post('/freelancers/punch-out', adminOrExecutive, checkCompany, freelancerUpload, freelancerPunchOut);
 router.get('/maintenance/garages/:companyId', adminOrExecutive, checkCompany, getUniqueGarages);
 router.get('/maintenance/vendor-summary/:companyId', adminOrExecutive, checkCompany, getMaintenanceVendorSummary);
+router.get('/maintenance/master-fleet/:companyId', adminOrExecutive, checkCompany, getMaintenanceMasterFleet);
 router.post('/maintenance/settle-vendor', adminOrExecutive, checkCompany, settleVendorDues);
 router.get('/maintenance/:companyId', adminOrExecutive, checkCompany, getMaintenanceRecords);
 router.get('/maintenance/pending/:companyId', adminOrExecutive, checkCompany, getPendingMaintenanceExpenses);
