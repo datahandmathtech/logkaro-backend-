@@ -34,6 +34,10 @@ const maintenanceSchema = new mongoose.Schema({
         type: Number,
         required: true
     },
+    paidAmount: {
+        type: Number,
+        default: 0
+    },
     paymentMode: {
         type: String,
         enum: ['Cash', 'UPI', 'Bank Transfer', 'Credit Card', 'Cash by Guest', 'Other', 'Others', 'Others / Personal'],

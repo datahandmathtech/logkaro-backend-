@@ -93,7 +93,11 @@ const {
     deleteLoan,
     recordLoanRepayment,
     markSalaryAsPaid,
-    getSalaryPayments
+    getSalaryPayments,
+    getVendorPayments,
+    createVendorPayment,
+    updateVendorPayment,
+    deleteVendorPayment
 } = require('../controllers/adminController');
 const {
     createEvent,
@@ -179,6 +183,12 @@ router.delete('/vehicles/:id/fastag-recharge/:historyId', adminOrExecutive, chec
 // Operational Routes (Shared Admin & Executive)
 router.delete('/drivers/:id', adminOrExecutive, checkCompany, deleteDriver);
 router.delete('/vehicles/:id', adminOrExecutive, checkCompany, deleteVehicle);
+
+// Vendor Payments (Outside Fleet Ledger)
+router.get('/vendor-payments/:companyId', adminOrExecutive, checkCompany, getVendorPayments);
+router.post('/vendor-payments', adminOrExecutive, checkCompany, createVendorPayment);
+router.put('/vendor-payments/:id', adminOrExecutive, checkCompany, updateVendorPayment);
+router.delete('/vendor-payments/:id', adminOrExecutive, checkCompany, deleteVendorPayment);
 router.delete('/attendance/:id', adminOrExecutive, checkCompany, deleteAttendance);
 router.put('/attendance/:id', adminOrExecutive, checkCompany, updateAttendance);
 router.patch('/attendance/:attendanceId/expense/:expenseId', adminOrExecutive, checkCompany, approveRejectExpense);

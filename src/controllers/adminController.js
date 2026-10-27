@@ -25,6 +25,7 @@ const CashTransaction = require('../models/CashTransaction');
 const Booking = require('../models/Booking');
 const Client = require('../models/Client');
 const LedgerEntry = require('../models/LedgerEntry');
+const VendorPayment = require('../models/VendorPayment');
 const { DateTime } = require('luxon');
 const {
     isCashMode,
@@ -1057,13 +1058,42 @@ const getAllVehicles = asyncHandler(async (req, res) => {
     }
 
     if (!usePagination) {
-        const vehicles = await fetchVehiclesAndSync(query);
+        const normalizePlate = (str) => String(str || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        let vehicles = await fetchVehiclesAndSync(query);
+        if (type === 'outside') {
+            const fleetVehs = await Vehicle.find({
+                $or: [
+                    { company: new mongoose.Types.ObjectId(companyId) },
+                    { company: companyId }
+                ],
+                isOutsideCar: { $ne: true }
+            }).select('carNumber').lean();
+            const fleetNormSet = new Set(fleetVehs.map(fv => normalizePlate(fv.carNumber)).filter(Boolean));
+            vehicles = vehicles.filter(v => {
+                const plate = normalizePlate(v.carNumber?.split('#')[0] || '');
+                return !fleetNormSet.has(plate);
+            });
+        }
         return res.json({ vehicles });
     }
 
+    const normalizePlate = (str) => String(str || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
     const count = await Vehicle.countDocuments(query);
-    const vehicles = await fetchVehiclesAndSync(query); // Using the same sync logic for paginated as well
-    // Note: Applying sync to the whole list to ensure correctness
+    let vehicles = await fetchVehiclesAndSync(query); // Using the same sync logic for paginated as well
+    if (type === 'outside') {
+        const fleetVehs = await Vehicle.find({
+            $or: [
+                { company: new mongoose.Types.ObjectId(companyId) },
+                { company: companyId }
+            ],
+            isOutsideCar: { $ne: true }
+        }).select('carNumber').lean();
+        const fleetNormSet = new Set(fleetVehs.map(fv => normalizePlate(fv.carNumber)).filter(Boolean));
+        vehicles = vehicles.filter(v => {
+            const plate = normalizePlate(v.carNumber?.split('#')[0] || '');
+            return !fleetNormSet.has(plate);
+        });
+    }
 
     res.json({ vehicles, page, pages: Math.ceil(count / pageSize), total: count });
 });
@@ -8714,20 +8744,22 @@ const getMaintenanceVendorSummary = asyncHandler(async (req, res) => {
         }
 
         const amt = Number(r.amount) || 0;
-        const isDue = r.paymentStatus === 'Due';
+        const paid = Number(r.paidAmount) || (r.paymentStatus === 'Paid' ? amt : 0);
+        const due = Math.max(0, amt - paid);
 
         vendorMap[vendorKey].totalAmount += amt;
         vendorMap[vendorKey].totalBills += 1;
         grandTotal += amt;
 
-        if (isDue) {
-            vendorMap[vendorKey].dueAmount += amt;
+        vendorMap[vendorKey].paidAmount += paid;
+        grandPaid += paid;
+
+        if (due > 0) {
+            vendorMap[vendorKey].dueAmount += due;
             vendorMap[vendorKey].dueBillsCount += 1;
-            grandDue += amt;
+            grandDue += due;
         } else {
-            vendorMap[vendorKey].paidAmount += amt;
             vendorMap[vendorKey].paidBillsCount += 1;
-            grandPaid += amt;
         }
 
         if (r.vehicle?.carNumber) {
@@ -8743,7 +8775,9 @@ const getMaintenanceVendorSummary = asyncHandler(async (req, res) => {
             billDate: r.billDate,
             billNumber: r.billNumber,
             amount: amt,
-            paymentStatus: r.paymentStatus || 'Paid',
+            paidAmount: paid,
+            dueAmount: due,
+            paymentStatus: due <= 0 ? 'Paid' : 'Due',
             paymentMode: r.paymentMode,
             paymentSource: r.paymentSource,
             bankAccount: r.bankAccount,
@@ -8757,10 +8791,41 @@ const getMaintenanceVendorSummary = asyncHandler(async (req, res) => {
         });
     });
 
-    const vendors = Object.values(vendorMap).map(v => ({
-        ...v,
-        vehicles: Array.from(v.vehicles)
-    })).sort((a, b) => b.dueAmount - a.dueAmount || b.totalAmount - a.totalAmount);
+    const vendors = Object.values(vendorMap).map(v => {
+        const monthMap = {};
+        v.bills.forEach(b => {
+            if (b.billDate) {
+                const d = new Date(b.billDate);
+                const y = d.getFullYear();
+                const m = d.getMonth() + 1;
+                const key = `${y}-${String(m).padStart(2, '0')}`;
+                const monthName = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+                if (!monthMap[key]) {
+                    monthMap[key] = {
+                        key,
+                        monthName,
+                        totalAmount: 0,
+                        paidAmount: 0,
+                        dueAmount: 0,
+                        billsCount: 0
+                    };
+                }
+                monthMap[key].totalAmount += (b.amount || 0);
+                monthMap[key].billsCount += 1;
+                if (b.paymentStatus === 'Due') {
+                    monthMap[key].dueAmount += (b.amount || 0);
+                } else {
+                    monthMap[key].paidAmount += (b.amount || 0);
+                }
+            }
+        });
+
+        return {
+            ...v,
+            vehicles: Array.from(v.vehicles),
+            monthlyBreakdown: Object.values(monthMap).sort((a, b) => b.key.localeCompare(a.key))
+        };
+    }).sort((a, b) => b.dueAmount - a.dueAmount || b.totalAmount - a.totalAmount);
 
     res.json({
         summary: {
@@ -8775,16 +8840,15 @@ const getMaintenanceVendorSummary = asyncHandler(async (req, res) => {
     });
 });
 
-// @desc    Settle all or specific due bills for a vendor in maintenance
+// @desc    Settle all or specific due bills for a vendor in maintenance (supports partial or custom amounts)
 // @route   POST /api/admin/maintenance/settle-vendor
 // @access  Private/Admin
 const settleVendorDues = asyncHandler(async (req, res) => {
-    const { companyId, vendorName, billIds, paymentMode, bankAccountId, paidBy, paymentDate } = req.body;
+    const { companyId, vendorName, billIds, paymentMode, bankAccountId, paidBy, paymentDate, amount } = req.body;
     const finalCompanyId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company || companyId;
 
     let query = {
-        company: finalCompanyId,
-        paymentStatus: 'Due'
+        company: finalCompanyId
     };
     if (billIds && Array.isArray(billIds) && billIds.length > 0) {
         query._id = { $in: billIds };
@@ -8792,25 +8856,43 @@ const settleVendorDues = asyncHandler(async (req, res) => {
         query.garageName = new RegExp(`^${vendorName.trim()}$`, 'i');
     }
 
-    const dueRecords = await Maintenance.find(query);
+    query.$or = [
+        { paymentStatus: 'Due' },
+        { $expr: { $lt: [{ $ifNull: ['$paidAmount', 0] }, '$amount'] } }
+    ];
+
+    const dueRecords = await Maintenance.find(query).sort({ billDate: 1, createdAt: 1 });
     if (!dueRecords.length) {
         return res.status(400).json({ message: 'No due records found for this vendor' });
     }
 
     const safePaymentMode = paymentMode || 'Cash';
-    const isOtherMode = safePaymentMode === 'Others' || safePaymentMode === 'Other' || String(safePaymentMode).toLowerCase().includes('personal');
+    const isOtherMode = safePaymentMode === 'Others' || safePaymentMode === 'Other' || String(safePaymentMode).toLowerCase().includes('personal') || paidBy === 'Others';
     const effectivePaidBy = isOtherMode ? 'Others' : (paidBy || 'Company');
     const effectiveDate = paymentDate || new Date();
+    const safeBankAccountId = (bankAccountId && !isOtherMode && safePaymentMode !== 'Cash') ? bankAccountId : null;
 
+    let toAllocate = (amount !== undefined && amount !== null && Number(amount) > 0) ? Number(amount) : null;
     const updatedRecords = [];
+
     for (const record of dueRecords) {
-        record.paymentStatus = 'Paid';
-        record.paymentMode = safePaymentMode;
-        if (bankAccountId && !isOtherMode && safePaymentMode !== 'Cash') {
-            record.bankAccount = bankAccountId;
-        } else {
-            record.bankAccount = null;
+        if (toAllocate !== null && toAllocate <= 0) break;
+
+        const currentPaid = Number(record.paidAmount) || 0;
+        const currentDue = Math.max(0, record.amount - currentPaid);
+        if (currentDue <= 0) continue;
+
+        const allocated = (toAllocate !== null) ? Math.min(currentDue, toAllocate) : currentDue;
+        if (allocated <= 0) continue;
+
+        if (toAllocate !== null) {
+            toAllocate -= allocated;
         }
+
+        record.paidAmount = currentPaid + allocated;
+        record.paymentStatus = (record.paidAmount >= record.amount) ? 'Paid' : 'Due';
+        record.paymentMode = safePaymentMode;
+        record.bankAccount = safeBankAccountId;
         await record.save();
 
         if (effectivePaidBy === 'Company') {
@@ -8819,13 +8901,13 @@ const settleVendorDues = asyncHandler(async (req, res) => {
                 companyId: finalCompanyId,
                 sourceId: record._id,
                 sourceType: 'Maintenance',
-                amount: record.amount,
+                amount: allocated,
                 date: effectiveDate,
                 paymentMode: safePaymentMode,
-                bankAccountId: record.bankAccount,
+                bankAccountId: safeBankAccountId,
                 type: 'OUT',
                 category: 'Vehicle Maintenance',
-                description: `Maintenance Settlement (${record.garageName || 'Vendor'}) for Vehicle ${veh?.carNumber || ''}`,
+                description: `Maintenance Settlement (${record.garageName || 'Vendor'})${record.paymentStatus === 'Due' ? ' (Partial Payment)' : ''} for Vehicle ${veh?.carNumber || ''}`,
                 reference: record.billNumber || '',
                 user: req.user?._id,
                 paidBy: 'Company'
@@ -8837,7 +8919,7 @@ const settleVendorDues = asyncHandler(async (req, res) => {
     res.json({
         success: true,
         settledCount: updatedRecords.length,
-        message: `Successfully settled ${updatedRecords.length} due bill(s)`
+        message: `Successfully recorded payment for ${updatedRecords.length} bill(s)`
     });
 });
 
@@ -8956,7 +9038,169 @@ const updateCompanySettings = asyncHandler(async (req, res) => {
     res.json(company);
 });
 
-module.exports = { getDriverSalarySummaryInternal,
+// @desc    Get Vendor Payments for a company
+// @route   GET /api/admin/vendor-payments/:companyId
+// @access  Private/Admin/Executive
+const getVendorPayments = asyncHandler(async (req, res) => {
+    const { companyId } = req.params;
+    const finalCompanyId = req.tenantFilter?.company || companyId;
+    const { vendorName } = req.query;
+
+    const query = { company: finalCompanyId };
+    if (vendorName) {
+        query.vendorName = new RegExp(`^${vendorName.trim()}$`, 'i');
+    }
+
+    const payments = await VendorPayment.find(query).sort({ date: -1, createdAt: -1 });
+    res.json({ success: true, count: payments.length, payments });
+});
+
+// @desc    Create Vendor Payment
+// @route   POST /api/admin/vendor-payments
+// @access  Private/Admin/Executive
+const createVendorPayment = asyncHandler(async (req, res) => {
+    const { companyId, vendorName, date, paymentType, amount, paymentMode, bankAccountId, paidBy, referenceNumber, notes } = req.body;
+    const finalCompanyId = req.tenantFilter?.company || companyId;
+
+    if (!finalCompanyId) {
+        return res.status(400).json({ message: 'Company ID is required' });
+    }
+    if (!vendorName || !vendorName.trim()) {
+        return res.status(400).json({ message: 'Vendor name is required' });
+    }
+    if (!amount || Number(amount) <= 0) {
+        return res.status(400).json({ message: 'Valid amount greater than 0 is required' });
+    }
+
+    const safePaymentMode = paymentMode || 'Bank Transfer';
+    const isOtherMode = safePaymentMode === 'Others' || safePaymentMode === 'Other' || String(safePaymentMode).toLowerCase().includes('personal') || paidBy === 'Others';
+    const effectivePaidBy = isOtherMode ? 'Others' : (paidBy || 'Company');
+    const safeBankAccountId = (bankAccountId && !isOtherMode && safePaymentMode !== 'Cash') ? bankAccountId : null;
+
+    const payment = new VendorPayment({
+        company: finalCompanyId,
+        vendorName: vendorName.trim(),
+        date: date ? new Date(date) : new Date(),
+        paymentType: paymentType || 'Paid',
+        amount: Number(amount),
+        paymentMode: safePaymentMode,
+        bankAccount: safeBankAccountId,
+        paidBy: effectivePaidBy,
+        referenceNumber: referenceNumber?.trim() || '',
+        notes: notes?.trim() || '',
+        createdBy: req.user?._id
+    });
+
+    await payment.save();
+
+    if (effectivePaidBy === 'Company') {
+        await recordFinancialTransaction({
+            companyId: finalCompanyId,
+            sourceId: payment._id,
+            sourceType: 'VendorPayment',
+            amount: payment.amount,
+            date: payment.date,
+            paymentMode: safePaymentMode,
+            bankAccountId: safeBankAccountId,
+            type: payment.paymentType === 'Paid' ? 'OUT' : 'IN',
+            category: 'Vendor Settlement',
+            description: `Outside Fleet Settlement (${payment.paymentType === 'Paid' ? 'Paid to' : 'Received from'} ${payment.vendorName})`,
+            reference: payment.referenceNumber || '',
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+    }
+
+    res.status(201).json({
+        success: true,
+        message: 'Vendor payment recorded successfully',
+        payment
+    });
+});
+
+// @desc    Update Vendor Payment
+// @route   PUT /api/admin/vendor-payments/:id
+// @access  Private/Admin/Executive
+const updateVendorPayment = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { vendorName, date, paymentType, amount, paymentMode, bankAccountId, paidBy, referenceNumber, notes } = req.body;
+
+    const payment = await VendorPayment.findById(id);
+    if (!payment) {
+        return res.status(404).json({ message: 'Payment record not found' });
+    }
+
+    if (vendorName) payment.vendorName = vendorName.trim();
+    if (date) payment.date = new Date(date);
+    if (paymentType) payment.paymentType = paymentType;
+    if (amount !== undefined) payment.amount = Number(amount);
+    if (paymentMode) payment.paymentMode = paymentMode;
+
+    const safePaymentMode = payment.paymentMode || 'Bank Transfer';
+    const isOtherMode = safePaymentMode === 'Others' || safePaymentMode === 'Other' || String(safePaymentMode).toLowerCase().includes('personal') || (paidBy && paidBy === 'Others');
+    const effectivePaidBy = isOtherMode ? 'Others' : (paidBy || payment.paidBy || 'Company');
+    payment.paidBy = effectivePaidBy;
+
+    if (bankAccountId !== undefined) {
+        payment.bankAccount = (!isOtherMode && safePaymentMode !== 'Cash' && bankAccountId) ? bankAccountId : null;
+    }
+    if (referenceNumber !== undefined) payment.referenceNumber = referenceNumber.trim();
+    if (notes !== undefined) payment.notes = notes.trim();
+
+    await payment.save();
+
+    if (effectivePaidBy === 'Company') {
+        await updateFinancialTransaction({
+            companyId: payment.company,
+            sourceId: payment._id,
+            sourceType: 'VendorPayment',
+            amount: payment.amount,
+            date: payment.date,
+            paymentMode: payment.paymentMode,
+            bankAccountId: payment.bankAccount,
+            type: payment.paymentType === 'Paid' ? 'OUT' : 'IN',
+            category: 'Vendor Settlement',
+            description: `Outside Fleet Settlement (${payment.paymentType === 'Paid' ? 'Paid to' : 'Received from'} ${payment.vendorName})`,
+            reference: payment.referenceNumber || '',
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+    } else {
+        await removeFinancialTransaction({ sourceId: payment._id, sourceType: 'VendorPayment', companyId: payment.company });
+    }
+
+    res.json({
+        success: true,
+        message: 'Vendor payment updated successfully',
+        payment
+    });
+});
+
+// @desc    Delete Vendor Payment
+// @route   DELETE /api/admin/vendor-payments/:id
+// @access  Private/Admin/Executive
+const deleteVendorPayment = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const payment = await VendorPayment.findById(id);
+    if (!payment) {
+        return res.status(404).json({ message: 'Payment record not found' });
+    }
+
+    await removeFinancialTransaction({ sourceId: payment._id, sourceType: 'VendorPayment', companyId: payment.company });
+    await VendorPayment.findByIdAndDelete(id);
+
+    res.json({
+        success: true,
+        message: 'Vendor payment deleted successfully'
+    });
+});
+
+module.exports = {
+    getVendorPayments,
+    createVendorPayment,
+    updateVendorPayment,
+    deleteVendorPayment,
+    getDriverSalarySummaryInternal,
     getPendingAllowances,
     getLiveMap,
     resolveAirCheck,
@@ -9053,3 +9297,4 @@ module.exports = { getDriverSalarySummaryInternal,
     recordLoanRepayment,
     updateCompanySettings
 };
+

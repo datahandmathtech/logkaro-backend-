@@ -872,10 +872,62 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
     }
 
     if (Array.isArray(itinerary)) {
+        const normalizePlate = (str) => String(str || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        const extractDigits = (str) => {
+            const m = String(str || '').match(/\d{3,4}/);
+            return m ? m[0] : '';
+        };
+
+        const fleetVehicles = await Vehicle.find({
+            company: booking.company,
+            isOutsideCar: { $ne: true }
+        }).select('_id carNumber model carType').lean();
+
+        const fleetNormSet = new Set(fleetVehicles.map(v => normalizePlate(v.carNumber)).filter(Boolean));
+        const fleetIdSet = new Set(fleetVehicles.map(v => String(v._id)));
+        const fleetDigitMap = new Map();
+        fleetVehicles.forEach(v => {
+            const d = extractDigits(v.carNumber);
+            if (d) {
+                if (!fleetDigitMap.has(d)) fleetDigitMap.set(d, []);
+                fleetDigitMap.get(d).push(v);
+            }
+        });
+
+        const findFleetVehicle = (vId, vNum) => {
+            if (vId && fleetIdSet.has(String(vId))) {
+                return fleetVehicles.find(v => String(v._id) === String(vId));
+            }
+            if (!vNum) return null;
+            const norm = normalizePlate(vNum);
+            if (norm && fleetNormSet.has(norm)) {
+                return fleetVehicles.find(v => normalizePlate(v.carNumber) === norm);
+            }
+            const digits = extractDigits(vNum);
+            if (digits && fleetDigitMap.has(digits)) {
+                const candidates = fleetDigitMap.get(digits);
+                if (candidates.length === 1) return candidates[0];
+                const upper = String(vNum).toUpperCase();
+                const byModel = candidates.find(v => {
+                    const m = (v.model || v.carType || '').toUpperCase();
+                    return m && upper.includes(m);
+                });
+                if (byModel) return byModel;
+            }
+            return null;
+        };
+
         const normalizedItinerary = itinerary.map((day, idx) => {
             const dayNo = day.dayNo || (idx + 1);
             const driverId = day.driverId && day.driverId !== 'custom' && day.driverId !== '__custom__' ? day.driverId : null;
-            const vehicleId = day.vehicleId && day.vehicleId !== 'custom' && day.vehicleId !== '__custom__' ? day.vehicleId : null;
+            let vehicleId = day.vehicleId && day.vehicleId !== 'custom' && day.vehicleId !== '__custom__' ? day.vehicleId : (day.vehicle || null);
+            let vehicleNumber = day.vehicleNumber || day.customCarNumber || '';
+            const matchedFleet = findFleetVehicle(vehicleId, vehicleNumber);
+            const isCompanyFleetCar = Boolean(matchedFleet);
+            if (matchedFleet) {
+                vehicleId = matchedFleet._id;
+                vehicleNumber = matchedFleet.carNumber;
+            }
             const dutyText = day.duty || day.description || 'City Tour / Transfer';
             return {
                 ...day,
@@ -886,14 +938,17 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 pickupPoint: day.pickupPoint !== undefined ? day.pickupPoint : (booking.pickupPoint || booking.pickupLocation || ''),
                 duty: dutyText,
                 description: dutyText,
-                vehicleType: day.vehicleType || booking.vehicleType || 'Innova Crysta',
+                vehicleType: matchedFleet ? (matchedFleet.carType || matchedFleet.model || day.vehicleType || booking.vehicleType) : (day.vehicleType || booking.vehicleType || 'Innova Crysta'),
                 driver: driverId,
                 driverId: day.driverId || '',
                 driverName: day.driverName || day.customDriverName || '',
                 driverPhone: day.driverPhone || day.driverMobile || '',
                 vehicle: vehicleId,
-                vehicleId: day.vehicleId || '',
-                vehicleNumber: day.vehicleNumber || day.customCarNumber || '',
+                vehicleId: vehicleId ? String(vehicleId) : '',
+                vehicleNumber: vehicleNumber,
+                isOutsideCar: isCompanyFleetCar ? false : Boolean(day.isOutsideCar),
+                ownerName: isCompanyFleetCar ? '' : (day.ownerName || ''),
+                buyAmount: isCompanyFleetCar ? '' : (day.buyAmount || ''),
                 amount: day.amount !== undefined && day.amount !== '' ? Number(day.amount) : 0,
                 km: day.km || ''
             };
@@ -967,8 +1022,14 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
             const driverId = day.driver;
             const driverName = day.driverName || '';
             const driverPhone = day.driverPhone || '';
-            const vehicleId = day.vehicle;
-            const vehicleNumber = day.vehicleNumber || '';
+            let vehicleId = day.vehicle;
+            let vehicleNumber = day.vehicleNumber || '';
+            const matchedFleet = findFleetVehicle(vehicleId, vehicleNumber);
+            const isCompanyFleetCar = Boolean(matchedFleet);
+            if (matchedFleet) {
+                vehicleId = matchedFleet._id;
+                vehicleNumber = matchedFleet.carNumber;
+            }
             const dutyText = day.duty || day.description || 'Scheduled Duty';
             const hotelDisplay = day.pickupPoint || booking.pickupPoint || booking.source || 'Direct';
 
@@ -986,15 +1047,35 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 });
             }
 
-            const isOutsideDay = Boolean(day.isOutside || day.isOutsideCar || day.ownerName || (vehicleNumber && (!vehicleId || day.vehicleId === 'custom')));
-            const vendorName = day.ownerName || day.vendorName || '';
-            const vendorPayout = day.buyAmount !== undefined && day.buyAmount !== '' ? Number(day.buyAmount) : 0;
+            const cleanCarNum = String(vehicleNumber || '').trim().toUpperCase();
+            const normCarNum = normalizePlate(vehicleNumber);
+
+            // Strictly exclude fleet vehicles from being classified as Outside Cars
+            const isOutsideDay = !isCompanyFleetCar && Boolean(
+                day.isOutside ||
+                day.isOutsideCar ||
+                (day.vehicleSource === 'External') ||
+                (day.ownerName && day.ownerName.trim() !== '') ||
+                (cleanCarNum && (!vehicleId || day.vehicleId === 'custom'))
+            );
+            const vendorName = isCompanyFleetCar ? '' : (day.ownerName || day.vendorName || '');
+            const vendorPayout = !isCompanyFleetCar && day.buyAmount !== undefined && day.buyAmount !== '' ? Number(day.buyAmount) : 0;
+
+            // If it is a company fleet car, proactively clean up any accidental duplicate outside car entries
+            if (isCompanyFleetCar && normCarNum) {
+                try {
+                    const platePattern = normCarNum.split('').join('[- ]*');
+                    await Vehicle.deleteMany({
+                        company: booking.company,
+                        isOutsideCar: true,
+                        carNumber: { $regex: new RegExp(`^${platePattern}#`, 'i') }
+                    });
+                } catch (_) {}
+            }
 
             // Sync Outside Car / Vendor into Vehicle collection (for Buy/Sell outside cars & vendor reporting)
             if (isOutsideDay && vehicleNumber) {
                 try {
-                    const Vehicle = require('../models/Vehicle');
-                    const cleanCarNum = String(vehicleNumber).trim().toUpperCase();
                     const bkgCodePart = String(booking.bookingCode || booking.bookingId || booking._id).slice(-6);
                     const carKey = `${cleanCarNum}#${dateStr || 'duty'}#${bkgCodePart}`;
 
@@ -1069,6 +1150,10 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     matchingDuty.isOutsideCar = true;
                     if (vendorName) matchingDuty.vendorName = vendorName;
                     if (vendorPayout) matchingDuty.vendorPayout = vendorPayout;
+                } else if (isCompanyFleetCar) {
+                    matchingDuty.isOutsideCar = false;
+                    matchingDuty.vendorName = '';
+                    matchingDuty.vendorPayout = 0;
                 }
                 await matchingDuty.save();
                 syncedDutyIds.push(matchingDuty._id);
