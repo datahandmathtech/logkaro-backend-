@@ -14,11 +14,15 @@ const Company = require('../models/Company');
  * Helper to determine if paymentMode represents Cash
  */
 const isCashMode = (paymentMode, bankAccountId) => {
-    if (bankAccountId) return false;
-    if (!paymentMode) return true;
-    const mode = String(paymentMode).toLowerCase();
+    if (!paymentMode) return !bankAccountId;
+    const mode = String(paymentMode).toLowerCase().trim();
     if (mode === 'others' || mode === 'other' || mode.includes('personal') || mode.includes('guest')) return false;
-    return mode.includes('cash') || mode === 'cash in hand' || mode === 'driver cash' || mode === 'cash to company';
+    // Explicit Cash always takes priority
+    if (mode.includes('cash') || mode === 'cash in hand' || mode === 'driver cash' || mode === 'cash to company') {
+        return true;
+    }
+    if (bankAccountId) return false;
+    return false;
 };
 
 /**
@@ -90,8 +94,17 @@ const recordFinancialTransaction = async ({
 
             console.log(`[transactionSync] Created CashTransaction (${type} ₹${numAmount}) for ${sourceType} (${sourceId})`);
             return { type: 'cash', tx: cashTx };
-        } else if (bankAccountId) {
-            const bank = await BankAccount.findById(bankAccountId);
+        } else {
+            // Bank Transaction (Bank Transfer, UPI, Online, Card, Cheque, QR Code, NEFT, etc.)
+            let bank = null;
+            if (bankAccountId) {
+                bank = await BankAccount.findById(bankAccountId);
+            }
+            if (!bank && companyId) {
+                bank = await BankAccount.findOne({ company: companyId, isDefault: true, isActive: { $ne: false } })
+                    || await BankAccount.findOne({ company: companyId, isActive: { $ne: false } });
+            }
+
             if (bank) {
                 bank.currentBalance = (bank.currentBalance || 0) + (type === 'OUT' ? -numAmount : numAmount);
                 await bank.save();
@@ -114,8 +127,10 @@ const recordFinancialTransaction = async ({
                     createdBy: effectiveUserId
                 });
 
-                console.log(`[transactionSync] Created BankTransaction (${type} ₹${numAmount}) for ${sourceType} (${sourceId})`);
+                console.log(`[transactionSync] Created BankTransaction (${type} ₹${numAmount}) for ${sourceType} (${sourceId}) in bank: ${bank.bankName}`);
                 return { type: 'bank', tx: bankTx };
+            } else {
+                console.warn(`[transactionSync] Warning: No active bank account found for company ${companyId} for ${sourceType} (${sourceId})`);
             }
         }
     } catch (err) {

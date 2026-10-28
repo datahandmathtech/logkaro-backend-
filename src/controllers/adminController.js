@@ -8623,19 +8623,60 @@ const updateBorderTax = asyncHandler(async (req, res) => {
 // @route   POST /api/admin/salary-payment
 // @access  Private/Admin
 const markSalaryAsPaid = asyncHandler(async (req, res) => {
-    const { staffId, companyId, month, year, amount, paymentMethod } = req.body;
+    const { staffId, companyId, month, year, amount, paymentMethod, method, bankAccountId } = req.body;
     
     if (!staffId || !companyId || !month || !year) {
         return res.status(400).json({ message: 'Missing required fields' });
     }
 
+    const effectiveMethod = paymentMethod || method || 'Bank Transfer';
+
     const payment = await StaffSalaryPayment.findOneAndUpdate(
         { staff: staffId, company: companyId, month, year },
-        { amount, status: 'paid', paymentMethod: paymentMethod || 'Cash', paymentDate: new Date() },
+        { amount, status: 'paid', paymentMethod: effectiveMethod, paymentDate: new Date() },
         { upsert: true, new: true }
     );
+
+    if (Number(amount) > 0) {
+        const staffDoc = await User.findById(staffId);
+        const MONTH_MAP = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthLabel = MONTH_MAP[Number(month) - 1] || month;
+
+        await updateFinancialTransaction({
+            companyId,
+            sourceId: payment._id,
+            sourceType: 'StaffSalary',
+            amount: Number(amount),
+            date: new Date(),
+            paymentMode: effectiveMethod,
+            bankAccountId: bankAccountId || null,
+            type: 'OUT',
+            category: 'Staff Salary',
+            description: `Staff Salary paid to ${staffDoc?.name || 'Staff'} (${monthLabel} ${year})`,
+            reference: `Salary ${monthLabel} ${year}`,
+            user: req.user?._id,
+            paidBy: 'Company'
+        });
+    }
     
     res.json(payment);
+});
+
+// @desc    Delete salary payment (Mark as due)
+// @route   DELETE /api/admin/salary-payment/:id
+// @access  Private/Admin
+const deleteSalaryPayment = asyncHandler(async (req, res) => {
+    const payment = await StaffSalaryPayment.findById(req.params.id);
+    if (!payment) {
+        return res.status(404).json({ message: 'Payment record not found' });
+    }
+    await removeFinancialTransaction({
+        sourceId: payment._id,
+        sourceType: 'StaffSalary',
+        companyId: payment.company
+    });
+    await payment.deleteOne();
+    res.json({ message: 'Salary payment removed and marked as due' });
 });
 
 // @desc    Get salary payment statuses for a month
@@ -9211,6 +9252,7 @@ module.exports = {
     settleVendorDues,
     getMaintenanceMasterFleet,
     markSalaryAsPaid,
+    deleteSalaryPayment,
     getSalaryPayments,
     createDriver,
     createVehicle,

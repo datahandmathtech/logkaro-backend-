@@ -93,6 +93,7 @@ const {
     deleteLoan,
     recordLoanRepayment,
     markSalaryAsPaid,
+    deleteSalaryPayment,
     getSalaryPayments,
     getVendorPayments,
     createVendorPayment,
@@ -249,6 +250,7 @@ router.get('/staff-stats/:companyId', adminOrExecutive, checkCompany, getStaffSt
 router.delete('/staff-attendance/:id', adminOrExecutive, checkCompany, deleteStaffAttendance);
 router.post('/staff-attendance/backdate', adminOrExecutive, checkCompany, addBackdatedAttendance);
 router.post('/salary-payment', adminOrExecutive, checkCompany, markSalaryAsPaid);
+router.delete('/salary-payment/:id', adminOrExecutive, checkCompany, deleteSalaryPayment);
 router.get('/salary-payments/:companyId', adminOrExecutive, checkCompany, getSalaryPayments);
 
 // Leave Requests

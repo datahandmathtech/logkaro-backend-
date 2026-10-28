@@ -1,4 +1,5 @@
 const asyncHandler = require('express-async-handler');
+const { DateTime } = require('luxon');
 const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
 const Booking = require('../models/Booking');
@@ -97,17 +98,16 @@ const getBankTransactions = asyncHandler(async (req, res) => {
         query.bankAccount = bankAccountId;
     }
 
-    // Date filter: Daily or Monthly
+    // Date filter: Daily or Monthly (IST-aware)
     if (date) {
-        const d = new Date(date);
-        const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-        const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+        const startOfDay = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
+        const endOfDay = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
         query.date = { $gte: startOfDay, $lte: endOfDay };
     } else if (month && year) {
         const m = parseInt(month);
         const y = parseInt(year);
-        const startDate = new Date(y, m - 1, 1, 0, 0, 0, 0);
-        const endDate = new Date(y, m, 0, 23, 59, 59, 999);
+        const startDate = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).startOf('month').toJSDate();
+        const endDate = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).endOf('month').toJSDate();
         query.date = { $gte: startDate, $lte: endDate };
     }
 
