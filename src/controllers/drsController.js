@@ -76,11 +76,34 @@ const getDRSDuties = asyncHandler(async (req, res) => {
 
     const duties = await DRSDuty.find(query)
         .populate('driver', 'name mobile')
-        .populate('vehicle', 'carNumber model type brand')
+        .populate('vehicle', 'carNumber model type brand ownerName isOutsideCar buyAmount')
         .populate('leadId', 'clientName leadId status totalAmount')
         .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid guestFuelFilled guestFuelAmount balanceDue bookingStatus paymentStatus travelStartDate travelEndDate itinerary vehicleType client')
         .sort({ date: 1, time: 1 })
         .lean();
+
+    // Enrich missing vendorName / ownerName from linked booking itinerary or vehicle
+    for (const d of duties) {
+        if (!d.vendorName && !d.ownerName) {
+            if (d.vehicle?.ownerName) {
+                d.vendorName = d.vehicle.ownerName;
+                d.ownerName = d.vehicle.ownerName;
+            } else if (Array.isArray(d.bookingRef?.itinerary)) {
+                const dDateStr = d.date ? new Date(d.date).toISOString().split('T')[0] : '';
+                const matchItin = d.bookingRef.itinerary.find(it => {
+                    const itDate = it.date ? new Date(it.date).toISOString().split('T')[0] : '';
+                    return (d.dayNo && it.dayNo === d.dayNo) || (dDateStr && itDate === dDateStr);
+                });
+                if (matchItin && (matchItin.ownerName || matchItin.vendorName)) {
+                    d.vendorName = matchItin.ownerName || matchItin.vendorName;
+                    d.ownerName = d.vendorName;
+                    if (matchItin.buyAmount !== undefined && !d.vendorPayout) {
+                        d.vendorPayout = Number(matchItin.buyAmount) || 0;
+                    }
+                }
+            }
+        }
+    }
         
     res.json(duties);
 });
@@ -94,7 +117,8 @@ const createDRSDuty = asyncHandler(async (req, res) => {
         carType, customCarNumber, driver, customDriverName, vehicle, itinerary,
         revenue, cOut, status, km,
         leadId, bookingId, bookingRef, pickupPoint, duty: dutyText, guestRemarks,
-        createConfirmedBooking, advancePaid, paymentMode, bankAccountId, paymentReference, notes
+        createConfirmedBooking, advancePaid, paymentMode, bankAccountId, paymentReference, notes,
+        vendorName, ownerName, isOutsideCar, vendorPayout, buyAmount
     } = req.body;
 
     const dutyDate = date ? new Date(date) : new Date();
@@ -328,6 +352,10 @@ const createDRSDuty = asyncHandler(async (req, res) => {
             bookingId: bookingId || null,
             bookingRef: bookingRef || null,
             guestRemarks: guestRemarks || '',
+            isOutsideCar: Boolean(isOutsideCar || vendorName || ownerName || (!vehicle && customCarNumber)),
+            vendorName: vendorName || ownerName || '',
+            ownerName: vendorName || ownerName || '',
+            vendorPayout: Number(vendorPayout || buyAmount) || 0,
             isDirectBooking: !leadId
         });
 
@@ -479,13 +507,45 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
         }
     }
 
+    // Outside car / Vendor handling
+    if (updatePayload.vendorName !== undefined) {
+        updatePayload.vendorName = String(updatePayload.vendorName || '').trim();
+        updatePayload.ownerName = updatePayload.vendorName;
+    }
+    if (updatePayload.ownerName !== undefined && !updatePayload.vendorName) {
+        updatePayload.vendorName = String(updatePayload.ownerName || '').trim();
+    }
+    if (updatePayload.vendorPayout !== undefined) {
+        updatePayload.vendorPayout = Number(updatePayload.vendorPayout) || 0;
+    } else if (updatePayload.buyAmount !== undefined) {
+        updatePayload.vendorPayout = Number(updatePayload.buyAmount) || 0;
+    }
+
+    if (updatePayload.vendorName || updatePayload.ownerName || (!updatePayload.vehicle && updatePayload.customCarNumber)) {
+        updatePayload.isOutsideCar = true;
+    } else if (updatePayload.vehicle) {
+        const vehCheck = await Vehicle.findById(updatePayload.vehicle).select('isOutsideCar ownerName').lean();
+        if (vehCheck && vehCheck.isOutsideCar) {
+            updatePayload.isOutsideCar = true;
+            if (!updatePayload.vendorName && vehCheck.ownerName) {
+                updatePayload.vendorName = vehCheck.ownerName;
+                updatePayload.ownerName = vehCheck.ownerName;
+            }
+        } else {
+            updatePayload.isOutsideCar = false;
+            updatePayload.vendorName = '';
+            updatePayload.ownerName = '';
+            updatePayload.vendorPayout = 0;
+        }
+    }
+
     const updatedDuty = await DRSDuty.findByIdAndUpdate(
         req.params.id,
         updatePayload,
         { new: true, runValidators: true }
     )
     .populate('driver', 'name mobile phone')
-    .populate('vehicle', 'carNumber model type brand')
+    .populate('vehicle', 'carNumber model type brand ownerName isOutsideCar buyAmount')
     .populate('leadId', 'clientName leadId status')
     .populate('bookingRef', 'bookingId clientCode clientName totalAmount advancePaid guestFuelFilled guestFuelAmount balanceDue bookingStatus');
 
@@ -615,7 +675,11 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                                 driverPhone: effectiveDriverPhone,
                                 vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
                                 vehicleId: effectiveVehicleId,
-                                vehicleNumber: effectiveVehicleNumber
+                                vehicleNumber: effectiveVehicleNumber,
+                                isOutsideCar: Boolean(updatedDuty.isOutsideCar),
+                                ownerName: updatedDuty.vendorName || updatedDuty.ownerName || plainItem.ownerName || '',
+                                vendorName: updatedDuty.vendorName || updatedDuty.ownerName || plainItem.vendorName || '',
+                                buyAmount: updatedDuty.vendorPayout !== undefined ? updatedDuty.vendorPayout : (plainItem.buyAmount || 0)
                             };
                         }
                         return plainItem;
@@ -639,7 +703,11 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                             driverPhone: effectiveDriverPhone,
                             vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
                             vehicleId: effectiveVehicleId,
-                            vehicleNumber: effectiveVehicleNumber
+                            vehicleNumber: effectiveVehicleNumber,
+                            isOutsideCar: Boolean(updatedDuty.isOutsideCar),
+                            ownerName: updatedDuty.vendorName || updatedDuty.ownerName || '',
+                            vendorName: updatedDuty.vendorName || updatedDuty.ownerName || '',
+                            buyAmount: updatedDuty.vendorPayout !== undefined ? updatedDuty.vendorPayout : 0
                         });
                     }
                     bkg.markModified('itinerary');
@@ -661,12 +729,77 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                         driverPhone: effectiveDriverPhone,
                         vehicle: updatedDuty.vehicle?._id || updatedDuty.vehicle || null,
                         vehicleId: effectiveVehicleId,
-                        vehicleNumber: effectiveVehicleNumber
+                        vehicleNumber: effectiveVehicleNumber,
+                        isOutsideCar: Boolean(updatedDuty.isOutsideCar),
+                        ownerName: updatedDuty.vendorName || updatedDuty.ownerName || '',
+                        vendorName: updatedDuty.vendorName || updatedDuty.ownerName || '',
+                        buyAmount: updatedDuty.vendorPayout !== undefined ? updatedDuty.vendorPayout : 0
                     }];
                     bkg.markModified('itinerary');
                 }
 
                 await bkg.save();
+
+                // -------------------------------------------------------------
+                // CASCADE SYNC 2.5: SYNC OUTSIDE CAR / VENDOR INTO VEHICLE MODEL
+                // -------------------------------------------------------------
+                try {
+                    const effCarNo = (effectiveVehicleNumber || '').trim().toUpperCase();
+                    const isOutsideDuty = Boolean(
+                        updatedDuty.isOutsideCar ||
+                        updatedDuty.vendorName ||
+                        updatedDuty.ownerName ||
+                        (effCarNo && !effectiveVehicleId)
+                    );
+                    const finalVendor = updatedDuty.vendorName || updatedDuty.ownerName || '';
+                    const finalPayout = Number(updatedDuty.vendorPayout) || 0;
+
+                    if (isOutsideDuty && effCarNo) {
+                        const dateStr = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
+                        const bkgCodePart = String(updatedDuty.bookingId || updatedDuty._id).slice(-6);
+                        const carKey = `${effCarNo}#${dateStr || 'duty'}#${bkgCodePart}`;
+
+                        let outVeh = await Vehicle.findOne({
+                            company: updatedDuty.company,
+                            isOutsideCar: true,
+                            $or: [
+                                { carNumber: carKey },
+                                { carNumber: { $regex: new RegExp(`^${effCarNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#${dateStr || ''}`, 'i') } }
+                            ]
+                        });
+
+                        const vehPayload = {
+                            carNumber: outVeh?.carNumber || carKey,
+                            model: updatedDuty.carType || 'Sedan',
+                            ownerName: finalVendor || outVeh?.ownerName || 'Outside Vendor',
+                            buyAmount: finalPayout || outVeh?.buyAmount || 0,
+                            dutyAmount: finalPayout || outVeh?.buyAmount || (outVeh?.dutyAmount || 0),
+                            revenue: Number(updatedDuty.revenue) || 0,
+                            driverName: effectiveDriverName || outVeh?.driverName || '',
+                            guestName: updatedDuty.clientName || '',
+                            dutyType: updatedDuty.duty || updatedDuty.itinerary || 'Scheduled Duty',
+                            dutyTime: updatedDuty.time || '09:00 AM',
+                            property: updatedDuty.hotel || updatedDuty.pickupPoint || '',
+                            transactionType: 'Buy',
+                            vehicleSource: 'External',
+                            isOutsideCar: true,
+                            permitType: 'Contract',
+                            carType: 'Other',
+                            company: updatedDuty.company,
+                            status: 'active',
+                            createdAt: updatedDuty.date ? new Date(updatedDuty.date) : new Date()
+                        };
+
+                        if (outVeh) {
+                            Object.assign(outVeh, vehPayload);
+                            await outVeh.save();
+                        } else {
+                            await Vehicle.create(vehPayload);
+                        }
+                    }
+                } catch (outErr) {
+                    console.error('Error syncing outside vehicle in updateDRSDuty:', outErr);
+                }
 
                 // -------------------------------------------------------------
                 // CASCADE SYNC 3: CLIENT (Clients Directory / Ledger)

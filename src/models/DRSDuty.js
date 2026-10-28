@@ -78,6 +78,22 @@ const drsDutySchema = new mongoose.Schema({
         ref: 'Vehicle',
         default: null
     },
+    isOutsideCar: {
+        type: Boolean,
+        default: false
+    },
+    vendorName: {
+        type: String,
+        default: ''
+    },
+    ownerName: {
+        type: String,
+        default: ''
+    },
+    vendorPayout: {
+        type: Number,
+        default: 0
+    },
     itinerary: {
         type: String,
         default: ''
