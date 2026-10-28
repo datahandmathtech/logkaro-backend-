@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const CashTransaction = require('../models/CashTransaction');
 const BankTransaction = require('../models/BankTransaction');
 const BankAccount = require('../models/BankAccount');
@@ -157,11 +158,14 @@ const removeFinancialTransaction = async ({
         // ── 1. Find & Revert Cash Transactions ──
         let cashTxs = [];
         if (sourceId) {
-            cashTxs = await CashTransaction.find({ sourceId });
-        }
-
-        // Fallback for older transactions created without sourceId
-        if (cashTxs.length === 0 && companyId && (category || driverRef || amount)) {
+            cashTxs = await CashTransaction.find({
+                $or: [
+                    { sourceId: sourceId },
+                    ...(mongoose.Types.ObjectId.isValid(sourceId) ? [{ sourceId: new mongoose.Types.ObjectId(sourceId) }] : [])
+                ]
+            });
+        } else if (companyId && (category || driverRef || amount)) {
+            // Fallback for older transactions created without sourceId
             const fallbackQuery = { company: companyId };
             if (category) fallbackQuery.category = category;
             if (driverRef) fallbackQuery.driverRef = driverRef;
@@ -183,10 +187,13 @@ const removeFinancialTransaction = async ({
         // ── 2. Find & Revert Bank Transactions ──
         let bankTxs = [];
         if (sourceId) {
-            bankTxs = await BankTransaction.find({ sourceId });
-        }
-
-        if (bankTxs.length === 0 && companyId && (category || amount)) {
+            bankTxs = await BankTransaction.find({
+                $or: [
+                    { sourceId: sourceId },
+                    ...(mongoose.Types.ObjectId.isValid(sourceId) ? [{ sourceId: new mongoose.Types.ObjectId(sourceId) }] : [])
+                ]
+            });
+        } else if (companyId && (category || amount)) {
             const fallbackBankQuery = { company: companyId };
             if (category) fallbackBankQuery.category = category;
             if (amount) fallbackBankQuery.amount = Number(amount);

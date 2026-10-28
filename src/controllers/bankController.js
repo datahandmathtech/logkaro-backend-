@@ -464,6 +464,21 @@ const deleteBankTransaction = asyncHandler(async (req, res) => {
         }
     }
 
+    // Sync Maintenance status if linked
+    if (tx.sourceType === 'Maintenance' && tx.sourceId) {
+        try {
+            const Maintenance = require('../models/Maintenance');
+            const maint = await Maintenance.findById(tx.sourceId);
+            if (maint) {
+                maint.paidAmount = Math.max(0, (Number(maint.paidAmount) || maint.amount) - tx.amount);
+                maint.paymentStatus = maint.paidAmount <= 0 ? 'Due' : (maint.paidAmount < maint.amount ? 'Due' : 'Paid');
+                await maint.save();
+            }
+        } catch (maintErr) {
+            console.error('Error syncing bank tx deletion to Maintenance:', maintErr);
+        }
+    }
+
     await tx.deleteOne();
     res.json({ message: 'Transaction deleted successfully', currentBalance: bank ? bank.currentBalance : 0 });
 });
