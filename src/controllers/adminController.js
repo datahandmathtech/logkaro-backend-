@@ -3320,6 +3320,7 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
         ...(nextServiceKm ? { nextServiceKm: Number(nextServiceKm) } : {}),
         ...(nextServiceDate ? { nextServiceDate } : {}),
         status: ['Completed', 'Pending', 'Scheduled'].includes(status) ? status : 'Completed',
+        source: norm(req.body.source) || (maintenanceType === 'Driver Services' ? 'Car Utility' : 'Maintenance'),
         createdBy: req.user._id
     };
 
@@ -3413,6 +3414,34 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
 
     res.status(201).json(record);
 });
+
+const isDriverServiceRecord = (r) => {
+    if (!r) return false;
+    const source = String(r.source || '').toLowerCase();
+    if (source === 'car utility' || source === 'driver app' || source === 'driver' || source === 'utility') return true;
+
+    const mType = String(r.maintenanceType || '').toLowerCase();
+    if (mType.includes('driver service') || mType.includes('car service') || mType.includes('car utility') || mType.includes('utility')) return true;
+
+    const cat = String(r.category || '').toLowerCase();
+    const desc = String(r.description || '').toLowerCase();
+
+    // Mechanical workshop keywords: NEVER an operational driver service
+    const isMechanical = /engine|clutch|gear|suspension|brake|timing belt|radiator|alternator|overhaul|periodic service|general servicing|oil filter|air filter|fuel filter/i.test(cat + ' ' + desc);
+    if (isMechanical) return false;
+
+    // Operational utility categories
+    const isWash = cat.includes('wash') || desc.includes('wash');
+    const isPuncture = cat.includes('punc') || desc.includes('punc');
+    const isTissue = cat.includes('tissue') || desc.includes('tissue');
+    const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('leak') && !cat.includes('pump')) ||
+        (desc.includes('water') && !desc.includes('repair') && !desc.includes('leak') && !desc.includes('pump'));
+    const isDriverCleaning = cat.includes('cleaning supplies') || desc.includes('cleaning supplies');
+    const isChallan = cat.includes('challan') || desc.includes('challan') || cat.includes('penalty') || desc.includes('penalty');
+    const isOtherMisc = cat.includes('other misc') || desc.includes('other misc') || cat.includes('other service');
+
+    return isWash || isPuncture || isTissue || isWater || isDriverCleaning || isChallan || isOtherMisc;
+};
 
 // @desc    Get all maintenance records for a company
 // @route   GET /api/admin/maintenance/:companyId
@@ -3530,34 +3559,6 @@ const getMaintenanceRecords = asyncHandler(async (req, res) => {
             }
         });
     });
-    const isDriverServiceRecord = (r) => {
-        const cat = String(r.category || '').toLowerCase();
-        const desc = String(r.description || '').toLowerCase();
-        const mType = String(r.maintenanceType || '').toLowerCase();
-        const source = String(r.source || '').toLowerCase();
-
-        // If explicitly driver app or source driver
-        if (source === 'driver app' || source === 'driver') return true;
-
-        // Mechanical workshop keywords: NEVER an operational driver service
-        const isMechanical = /engine|clutch|gear|suspension|brake|timing belt|radiator|alternator|overhaul|periodic service|general servicing|oil filter|air filter|fuel filter/i.test(cat + ' ' + desc);
-        if (isMechanical) return false;
-
-        // Driver services type or operational car service
-        if (mType === 'driver services' || mType === 'driver service' || mType === 'car service') return true;
-
-        // Operational categories
-        const isWash = cat.includes('wash') || desc.includes('wash');
-        const isPuncture = cat.includes('punc') || desc.includes('punc');
-        const isTissue = cat.includes('tissue') || desc.includes('tissue');
-        const isWater = (cat.includes('water') && !cat.includes('repair') && !cat.includes('leak') && !cat.includes('pump')) ||
-            (desc.includes('water') && !desc.includes('repair') && !desc.includes('leak') && !desc.includes('pump'));
-        const isDriverCleaning = cat.includes('cleaning supplies') || desc.includes('cleaning supplies');
-        const isChallan = cat.includes('challan') || desc.includes('challan') || cat.includes('penalty') || desc.includes('penalty');
-        const isOtherMisc = cat.includes('other misc') || desc.includes('other misc') || cat.includes('other service');
-
-        return isWash || isPuncture || isTissue || isWater || isDriverCleaning || isChallan || isOtherMisc;
-    };
 
     let combined = [];
 
@@ -8724,7 +8725,7 @@ const getMaintenanceVendorSummary = asyncHandler(async (req, res) => {
     let grandPaid = 0;
     let grandDue = 0;
 
-    records.forEach(r => {
+    records.filter(r => !isDriverServiceRecord(r)).forEach(r => {
         const rawName = (r.garageName || 'Unknown Vendor').trim();
         const vendorKey = rawName.toLowerCase();
 
@@ -8953,11 +8954,12 @@ const getMaintenanceMasterFleet = asyncHandler(async (req, res) => {
     const records = await Maintenance.find({
         ...companyQuery,
         billDate: { $gte: startDate, $lte: endDate }
-    }).select('_id vehicle amount maintenanceType category description billDate garageName paymentStatus').lean();
+    }).select('_id vehicle amount maintenanceType category description billDate garageName paymentStatus source').lean();
 
     // 3. Map records to each vehicle
     const vehicleRecordsMap = {};
     for (const r of records) {
+        if (isDriverServiceRecord(r)) continue;
         const vId = (r.vehicle?._id || r.vehicle || '').toString();
         if (vId) {
             if (!vehicleRecordsMap[vId]) {

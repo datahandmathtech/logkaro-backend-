@@ -66,6 +66,10 @@ const maintenanceSchema = new mongoose.Schema({
         enum: ['Completed', 'Pending', 'Scheduled'],
         default: 'Completed'
     },
+    source: {
+        type: String,
+        default: 'Maintenance'
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
