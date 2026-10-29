@@ -51,7 +51,53 @@ const companySchema = new mongoose.Schema({
     cashBalance: {
         type: Number,
         default: 0
+    },
+    // 🌟 Advanced Multi-Tenant Feature Configuration (Managed via SuperAdmin)
+    businessModel: {
+        type: String,
+        enum: ['B2B', 'B2C', 'Both'],
+        default: 'Both'
+    },
+    appAccess: {
+        type: Object,
+        default: () => ({
+            adminPortal: true,
+            driverPortal: true,
+            clientPortal: false
+        })
+    },
+    driverAppSettings: {
+        type: Object,
+        default: () => ({
+            photoUploadCount: 2,
+            requireMeterReading: true,
+            allowSelfPunch: true
+        })
+    },
+    operationalSettings: {
+        type: Object,
+        default: () => ({
+            parking: { enabled: true, trackPayment: true },
+            fuel: { enabled: true, requireKmReading: true },
+            outsideCars: { enabled: true },
+            borderTax: { enabled: true },
+            fastag: { enabled: true },
+            maintenance: { enabled: true },
+            leads: { enabled: true },
+            drs: { enabled: true },
+            invoices: { enabled: true }
+        })
+    },
+    salarySettings: {
+        type: Object,
+        default: () => ({
+            salaryType: 'monthly',
+            monthlyLeaveAllowance: 2,
+            carryForwardLeaves: false,
+            dayAllowance: { enabled: true, defaultAmount: 200 },
+            nightAllowance: { enabled: true, defaultAmount: 250 }
+        })
     }
-}, { timestamps: true });
+}, { timestamps: true, strict: false });
 
 module.exports = mongoose.model('Company', companySchema);

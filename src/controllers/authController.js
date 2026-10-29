@@ -183,6 +183,14 @@ const loginUser = async (req, res) => {
                         message: 'This account has been suspended by the administrator. Please contact support.' 
                     });
                 }
+
+                // MULTI-TENANT: Check if Driver portal login is disabled for driver's company
+                if ((user.role === 'Driver' || user.role === 'driver') && user.company?.appAccess?.driverPortal === false) {
+                    logError(`Driver login blocked: Company ${user.company.name} has disabled Driver Portal login.`);
+                    return res.status(403).json({
+                        message: 'Driver mobile app login is disabled for your organization. Please contact your office administrator.'
+                    });
+                }
             } else {
                 logError('DEBUG: User has no company associated.');
             }

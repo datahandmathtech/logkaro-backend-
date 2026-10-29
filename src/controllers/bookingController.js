@@ -6,6 +6,8 @@ const BankAccount = require('../models/BankAccount');
 const BankTransaction = require('../models/BankTransaction');
 const CashTransaction = require('../models/CashTransaction');
 const Company = require('../models/Company');
+const Vehicle = require('../models/Vehicle');
+const Lead = require('../models/Lead');
 const { syncInvoiceForBooking } = require('./invoiceController');
 const asyncHandler = require('express-async-handler');
 
