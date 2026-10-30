@@ -72,6 +72,11 @@ const companySchema = new mongoose.Schema({
             photoUploadCount: 3,
             requireMeterReading: true,
             allowSelfPunch: true,
+            dutyForm: {
+                showMeterReading: true,
+                showOutsideCityQuestion: true,
+                showDutyDetails: true
+            },
             parking: { driverCanEnterAmount: true },
             fuel: { showLiters: true, showFuelType: true, showAmount: true, showKm: true }
         })
