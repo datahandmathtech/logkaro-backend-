@@ -574,3 +574,22 @@
 [2026-10-30T06:51:35.901Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$CzR, isMatch=true
 [2026-10-30T06:51:35.902Z] Password matched
 [2026-10-30T06:51:35.902Z] DEBUG: Company status in DB is: "trial" (Normalized: "trial")
+[2026-10-30T07:35:32.008Z] CRON: Cron Jobs Initialized
+[2026-10-30T10:41:33.683Z] Login attempt started
+[2026-10-30T10:41:33.686Z] Login request for: 122
+[2026-10-30T10:41:33.689Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-30T10:41:37.239Z] Login attempt started
+[2026-10-30T10:41:37.240Z] Login request for: 122
+[2026-10-30T10:41:37.240Z] Login aborted: Database not connected (Current State: Disconnected)
+[2026-10-30T10:41:56.870Z] Login attempt started
+[2026-10-30T10:41:56.871Z] Login request for: 122
+[2026-10-30T10:41:57.090Z] User found: Abhay123 (Role: Driver)
+[2026-10-30T10:41:57.185Z] Match debug: receivedPwdLen=3, dbHashStart=$2a$10$syV, isMatch=true
+[2026-10-30T10:41:57.185Z] Password matched
+[2026-10-30T10:41:57.185Z] DEBUG: Company status in DB is: "trial" (Normalized: "trial")
+[2026-10-30T10:41:57.618Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Company: 6ae2e06d43e75b94668a4e82
+[2026-10-30T10:41:57.743Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Comp: 6ae2e06d43e75b94668a4e82, Found: 1 vehicles
+[2026-10-30T10:41:57.874Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ27AS2029
+[2026-10-30T10:50:31.328Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Company: 6ae2e06d43e75b94668a4e82
+[2026-10-30T10:50:31.381Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Comp: 6ae2e06d43e75b94668a4e82, Found: 1 vehicles
+[2026-10-30T10:50:31.453Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ27AS2029
