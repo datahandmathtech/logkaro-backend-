@@ -2,6 +2,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Vehicle = require('../models/Vehicle');
 const Advance = require('../models/Advance');
+const Company = require('../models/Company');
 const Parking = require('../models/Parking');
 const Loan = require('../models/Loan');
 const Allowance = require('../models/Allowance');
@@ -271,16 +272,27 @@ const punchIn = async (req, res) => {
         const kmPhoto = req.files?.['kmPhoto']?.[0]?.path;
         const carSelfie = req.files?.['carSelfie']?.[0]?.path;
 
-        if (!selfie || !kmPhoto || !carSelfie) {
-            return res.status(400).json({ message: 'Selfie, KM photo, and Car selfie are mandatory' });
-        }
-
         const today = getTodayIST();
         const driver = await User.findById(req.user._id).populate('company');
         const companyId = driver.company?._id || driver.company;
 
         if (!companyId) {
             return res.status(401).json({ message: "No company associated with this account." });
+        }
+
+        const photoUploadCount = driver.company?.driverAppSettings?.photoUploadCount ?? 3;
+        if (photoUploadCount >= 3) {
+            if (!selfie || !kmPhoto || !carSelfie) {
+                return res.status(400).json({ message: 'Selfie, KM photo, and Car selfie are mandatory' });
+            }
+        } else if (photoUploadCount === 2) {
+            if (!selfie || !kmPhoto) {
+                return res.status(400).json({ message: 'Selfie and KM photo are mandatory' });
+            }
+        } else if (photoUploadCount === 1) {
+            if (!kmPhoto) {
+                return res.status(400).json({ message: 'KM photo is mandatory' });
+            }
         }
 
         // Use vehicleId from body OR fallback to assignedVehicle
@@ -384,10 +396,6 @@ const punchOut = async (req, res) => {
     const carSelfie = req.files?.['carSelfie']?.[0]?.path;
 
     try {
-        if (!selfie || !kmPhoto || !carSelfie) {
-            return res.status(400).json({ message: 'Selfie, KM photo, and Car selfie are mandatory' });
-        }
-
         // Search for ANY incomplete shift for this driver, regardless of the date
         const attendance = await Attendance.findOne({
             driver: req.user._id,
@@ -402,6 +410,22 @@ const punchOut = async (req, res) => {
         const companyId = attendance.company;
         if (!companyId) {
             return res.status(400).json({ message: 'Shift has no company associated.' });
+        }
+
+        const compDoc = await Company.findById(companyId);
+        const photoUploadCount = compDoc?.driverAppSettings?.photoUploadCount ?? 3;
+        if (photoUploadCount >= 3) {
+            if (!selfie || !kmPhoto || !carSelfie) {
+                return res.status(400).json({ message: 'Selfie, KM photo, and Car selfie are mandatory' });
+            }
+        } else if (photoUploadCount === 2) {
+            if (!selfie || !kmPhoto) {
+                return res.status(400).json({ message: 'Selfie and KM photo are mandatory' });
+            }
+        } else if (photoUploadCount === 1) {
+            if (!kmPhoto) {
+                return res.status(400).json({ message: 'KM photo is mandatory' });
+            }
         }
 
         console.log(`[PunchOut] Found active shift ${attendance._id} (Started: ${attendance.date}) for driver ${req.user.name}`);
@@ -502,19 +526,31 @@ const punchOut = async (req, res) => {
                 amounts = amounts ? [amounts] : [];
             }
 
-            // Loop over amounts and add to PENDING expenses
-            amounts.forEach((amt, index) => {
-                const amount = Number(amt) || 0;
-                const slip = parkingSlips[index];
-
-                attendance.pendingExpenses.push({
-                    type: 'parking',
-                    amount: amount,
-                    slipPhoto: slip ? slip.path : null,
-                    status: 'pending',
-                    paymentSource: 'Office' // Default, consistent with addExpense
+            // Loop over slips/amounts and add to PENDING expenses
+            if (amounts.length === 0 && parkingSlips.length > 0) {
+                parkingSlips.forEach((slip) => {
+                    attendance.pendingExpenses.push({
+                        type: 'parking',
+                        amount: 0,
+                        slipPhoto: slip ? slip.path : null,
+                        status: 'pending',
+                        paymentSource: 'Office'
+                    });
                 });
-            });
+            } else {
+                amounts.forEach((amt, index) => {
+                    const amount = Number(amt) || 0;
+                    const slip = parkingSlips[index];
+
+                    attendance.pendingExpenses.push({
+                        type: 'parking',
+                        amount: amount,
+                        slipPhoto: slip ? slip.path : null,
+                        status: 'pending',
+                        paymentSource: 'Office'
+                    });
+                });
+            }
         }
 
         // attendance.parking = parkingData; // REMOVED: Do not auto-approve

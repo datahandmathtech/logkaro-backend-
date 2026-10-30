@@ -69,16 +69,18 @@ const companySchema = new mongoose.Schema({
     driverAppSettings: {
         type: Object,
         default: () => ({
-            photoUploadCount: 2,
+            photoUploadCount: 3,
             requireMeterReading: true,
-            allowSelfPunch: true
+            allowSelfPunch: true,
+            parking: { driverCanEnterAmount: true },
+            fuel: { showLiters: true, showFuelType: true, showAmount: true, showKm: true }
         })
     },
     operationalSettings: {
         type: Object,
         default: () => ({
-            parking: { enabled: true, trackPayment: true },
-            fuel: { enabled: true, requireKmReading: true },
+            parking: { enabled: true, trackPayment: true, driverCanEnterAmount: true },
+            fuel: { enabled: true, requireKmReading: true, showLiters: true, showFuelType: true, showAmount: true, showKm: true },
             outsideCars: { enabled: true },
             borderTax: { enabled: true },
             fastag: { enabled: true },
