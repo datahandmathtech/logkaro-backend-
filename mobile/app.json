@@ -1,26 +1,43 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "LogKaro Driver",
+    "slug": "logkaro-driver",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#080c14"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.logkaro.driver",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LogKaro Driver needs camera access to capture odometer and vehicle duty photos.",
+        "NSLocationWhenInUseUsageDescription": "LogKaro Driver needs your location to track live taxi routes and duty timings.",
+        "NSPhotoLibraryUsageDescription": "LogKaro Driver needs photo access to upload fuel and parking slips."
+      }
     },
     "android": {
+      "package": "com.logkaro.driver",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#080c14"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "WAKE_LOCK",
+        "VIBRATE",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
