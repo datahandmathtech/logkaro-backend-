@@ -867,6 +867,12 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
     } else {
         // If duty is direct or linked to Lead directly
         try {
+            const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+            await syncOutsideCarFromDuty(updatedDuty);
+        } catch (outErr) {
+            console.error('Error syncing outside vehicle in standalone updateDRSDuty:', outErr);
+        }
+        try {
             if (updatedDuty.leadId) {
                 const Lead = require('../models/Lead');
                 await Lead.findByIdAndUpdate(updatedDuty.leadId, {
