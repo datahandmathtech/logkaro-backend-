@@ -688,3 +688,9 @@
 [2026-10-31T10:53:45.975Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
 [2026-10-31T11:05:06.174Z] CRON: Cron Jobs Initialized
 [2026-10-31T11:05:35.991Z] CRON: Cron Jobs Initialized
+[2026-10-31T11:15:38.196Z] Login attempt started
+[2026-10-31T11:15:38.197Z] Login request for: Kavishuser1
+[2026-10-31T11:15:38.336Z] User found: Yatree (Role: Admin)
+[2026-10-31T11:15:38.594Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-31T11:15:38.595Z] Password matched
+[2026-10-31T11:15:38.595Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
