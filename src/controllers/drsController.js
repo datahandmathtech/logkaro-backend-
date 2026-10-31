@@ -889,14 +889,7 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
         }
     }
 
-        if (!bkg) {
-        try {
-            const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
-            await syncOutsideCarFromDuty(updatedDuty, null);
-        } catch (_) {}
-    }
-
-    res.json(updatedDuty);
+res.json(updatedDuty);
 });
 
 // @desc    Delete a DRS duty

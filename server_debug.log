@@ -621,3 +621,22 @@
 [2026-10-31T04:50:29.487Z] CRON: Cron Jobs Initialized
 [2026-10-31T05:00:00.516Z] CRON: Starting Daily Warranty Expiry Check
 [2026-10-31T05:00:10.533Z] CRON: ERROR in Warranty Expiry Check: Operation `partswarranties.updateMany()` buffering timed out after 10000ms
+[2026-10-31T06:53:47.232Z] CRON: Cron Jobs Initialized
+[2026-10-31T06:56:45.090Z] Login attempt started
+[2026-10-31T06:56:45.092Z] Login request for: Kavishuser1
+[2026-10-31T06:56:45.214Z] User found: Yatree (Role: Admin)
+[2026-10-31T06:56:45.379Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-10-31T06:56:45.379Z] Password matched
+[2026-10-31T06:56:45.379Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-10-31T06:56:53.436Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-31T06:56:53.444Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-31T06:58:08.356Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-31T06:58:08.360Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-31T06:58:13.436Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-31T06:58:13.444Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-31T06:58:22.925Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-10-31T06:58:22.939Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":true,"vehicleSource":{"$ne":"Fleet"},"company":"698ac8b01587e01651a49443"}
+[2026-10-31T06:58:48.842Z] GLOBAL_ERROR: bkg is not defined - Stack: ReferenceError: bkg is not defined
+    at e:\New folder\Master-Server\TEXI\yatree-backend\src\controllers\drsController.js:892:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[2026-10-31T06:59:59.292Z] CRON: Cron Jobs Initialized
