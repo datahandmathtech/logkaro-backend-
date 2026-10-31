@@ -1347,6 +1347,15 @@ const updateVehicle = asyncHandler(async (req, res) => {
         { new: true, runValidators: false }
     ).populate('currentDriver', 'name mobile');
 
+    if (updatedVehicle && updatedVehicle.isOutsideCar) {
+        try {
+            const { syncFromVehicleUpdate } = require('../utils/outsideCarSync');
+            await syncFromVehicleUpdate(updatedVehicle);
+        } catch (syncErr) {
+            console.error('Error cascading outside vehicle update:', syncErr);
+        }
+    }
+
     // Clear dashboard cache on mutation
     DASHBOARD_CACHE.clear();
 
@@ -1493,6 +1502,12 @@ const deleteVehicle = asyncHandler(async (req, res) => {
         }
         // If it's an outside car duty voucher, also clean up associated stray entries
         if (vehicle.isOutsideCar) {
+            try {
+                const { syncFromVehicleDelete } = require('../utils/outsideCarSync');
+                await syncFromVehicleDelete(vehicle);
+            } catch (delSyncErr) {
+                console.error('Error cascading outside vehicle deletion:', delSyncErr);
+            }
             const dateSuffix = vehicle.carNumber?.split('#')?.[1]; // e.g., 2023-10-27
             if (dateSuffix) {
                 const startDay = new Date(`${dateSuffix}T00:00:00.000Z`);

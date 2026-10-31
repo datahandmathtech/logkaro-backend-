@@ -200,7 +200,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                         description: `Advance Payment Received - ${clientName || 'Guest'} (${clientCode})`,
                         clientRef: client._id,
                         guestName: clientName || '',
-                        sourceId: firstDuty._id,
+                        sourceId: client._id,
                         sourceType: 'DRSDuty',
                         date: dutyDate,
                         createdBy: req.user ? req.user._id : null
@@ -225,7 +225,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                         reference: paymentReference || '',
                         description: `Advance Payment Received - ${clientName || 'Guest'} (${clientCode})`,
                         clientRef: client._id,
-                        sourceId: firstDuty._id,
+                        sourceId: client._id,
                         sourceType: 'DRSDuty',
                         date: dutyDate,
                         createdBy: req.user ? req.user._id : null
@@ -236,27 +236,51 @@ const createDRSDuty = asyncHandler(async (req, res) => {
             }
         }
 
-        // Build multi-day itinerary for Booking
+        const incomingVehicles = (Array.isArray(req.body.vehicles) && req.body.vehicles.length > 0)
+            ? req.body.vehicles
+            : [{
+                carType: carType || 'Sedan',
+                driver: driver || null,
+                vehicle: vehicle || null,
+                customDriverName: customDriverName || '',
+                customCarNumber: customCarNumber || '',
+                vendorName: vendorName || ownerName || '',
+                vendorPayout: Number(vendorPayout || buyAmount) || 0,
+                isOutsideCar: Boolean(isOutsideCar || vendorName || ownerName || (!vehicle && customCarNumber))
+            }];
+
+        const numCars = incomingVehicles.length;
+        const displayVehicleType = incomingVehicles.map(v => v.carType || 'Sedan').filter((val, idx, arr) => arr.indexOf(val) === idx).join(' + ') || (carType || 'Sedan');
+
+        // Build multi-day, multi-vehicle itinerary for Booking
         const bookingItinerary = [];
         for (let i = 0; i < totalDays; i++) {
             const dayDate = new Date(dutyDate);
             dayDate.setDate(dutyDate.getDate() + i);
             const dText = i === 0 ? (dutyText || itinerary || 'City Duty') : (i === totalDays - 1 ? 'City Tour & Drop' : 'City Sightseeing');
-            bookingItinerary.push({
-                dayNo: i + 1,
-                date: dayDate,
-                time: time || '09:00 AM',
-                pickupPoint: pickupPoint || hotel || '',
-                duty: dText,
-                description: dText,
-                vehicleType: carType || 'Sedan',
-                vehicleCount: 1,
-                amount: i === 0 ? totalRev : 0,
-                driver: driver || null,
-                vehicle: vehicle || null,
-                driverName: customDriverName || '',
-                vehicleNumber: customCarNumber || ''
-            });
+            for (let vIdx = 0; vIdx < incomingVehicles.length; vIdx++) {
+                const vItem = incomingVehicles[vIdx];
+                bookingItinerary.push({
+                    dayNo: i + 1,
+                    carIndex: vIdx + 1,
+                    date: dayDate,
+                    time: time || '09:00 AM',
+                    pickupPoint: pickupPoint || hotel || '',
+                    duty: dText,
+                    description: dText,
+                    vehicleType: vItem.carType || carType || 'Sedan',
+                    vehicleCount: 1,
+                    amount: (i === 0 && vIdx === 0) ? totalRev : 0,
+                    driver: vItem.driver || null,
+                    vehicle: vItem.vehicle || null,
+                    driverName: vItem.customDriverName || '',
+                    vehicleNumber: vItem.customCarNumber || '',
+                    isOutsideCar: Boolean(vItem.isOutsideCar || vItem.vendorName),
+                    ownerName: vItem.vendorName || '',
+                    vendorName: vItem.vendorName || '',
+                    buyAmount: Number(vItem.vendorPayout) || 0
+                });
+            }
         }
 
         // 5. Booking Document
@@ -273,8 +297,8 @@ const createDRSDuty = asyncHandler(async (req, res) => {
             bookingDate: new Date(),
             travelStartDate: dutyDate,
             travelEndDate: endDateObj,
-            vehicleType: carType || 'Sedan',
-            numberOfCars: 1,
+            vehicleType: displayVehicleType,
+            numberOfCars: numCars,
             itinerary: bookingItinerary,
             totalAmount: totalRev,
             advancePaid: advance,
@@ -307,7 +331,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                 bookingId: clientCode,
                 travelStartDate: dutyDate,
                 travelEndDate: endDateObj,
-                vehicleType: carType || 'Sedan',
+                vehicleType: displayVehicleType,
                 itinerary: bookingItinerary
             });
             createdBooking.lead = createdLead._id;
@@ -319,47 +343,76 @@ const createDRSDuty = asyncHandler(async (req, res) => {
         bookingRef = createdBooking._id;
     }
 
-    // Create DRS Duties for each day from start date to end date
+    // Create DRS Duties for each day and each vehicle
     const createdDuties = [];
+    const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+    const incomingVehicles = (Array.isArray(req.body.vehicles) && req.body.vehicles.length > 0)
+        ? req.body.vehicles
+        : [{
+            carType: carType || 'Sedan',
+            driver: driver || null,
+            vehicle: vehicle || null,
+            customDriverName: customDriverName || '',
+            customCarNumber: customCarNumber || '',
+            vendorName: vendorName || ownerName || '',
+            vendorPayout: Number(vendorPayout || buyAmount) || 0,
+            isOutsideCar: Boolean(isOutsideCar || vendorName || ownerName || (!vehicle && customCarNumber))
+        }];
+
     for (let i = 0; i < totalDays; i++) {
         const dayDate = new Date(dutyDate);
         dayDate.setDate(dutyDate.getDate() + i);
         const dText = i === 0 ? (dutyText || itinerary || 'City Duty') : (i === totalDays - 1 ? 'City Tour & Drop' : 'City Sightseeing');
 
-        const duty = await DRSDuty.create({
-            company,
-            clientName: clientName || 'Guest (TBA)',
-            mobileNumber: mobileNumber || '',
-            hotel: hotel || '',
-            date: dayDate,
-            time: time || '09:00 AM',
-            carType: carType || 'Sedan',
-            customCarNumber: customCarNumber || '',
-            driver: driver || null,
-            customDriverName: customDriverName || '',
-            vehicle: vehicle || null,
-            itinerary: dText,
-            duty: dText,
-            dayNo: i + 1,
-            pickupPoint: pickupPoint || hotel || '',
-            revenue: i === 0 ? totalRev : 0,
-            advancePaid: advance,
-            km: km || '',
-            cOut: cOut || '',
-            paymentStatus: (advance >= totalRev && totalRev > 0) ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'Pending'),
-            status: status || (driver || customDriverName ? 'Assigned' : 'Scheduled'),
-            leadId: leadId || null,
-            bookingId: bookingId || null,
-            bookingRef: bookingRef || null,
-            guestRemarks: guestRemarks || '',
-            isOutsideCar: Boolean(isOutsideCar || vendorName || ownerName || (!vehicle && customCarNumber)),
-            vendorName: vendorName || ownerName || '',
-            ownerName: vendorName || ownerName || '',
-            vendorPayout: Number(vendorPayout || buyAmount) || 0,
-            isDirectBooking: !leadId
-        });
+        for (let vIdx = 0; vIdx < incomingVehicles.length; vIdx++) {
+            const vItem = incomingVehicles[vIdx];
+            const isOutside = Boolean(vItem.isOutsideCar || vItem.vendorName || (!vItem.vehicle && vItem.customCarNumber));
+            const vPayout = Number(vItem.vendorPayout) || 0;
 
-        createdDuties.push(duty);
+            const duty = await DRSDuty.create({
+                company,
+                clientName: clientName || 'Guest (TBA)',
+                mobileNumber: mobileNumber || '',
+                hotel: hotel || '',
+                date: dayDate,
+                time: time || '09:00 AM',
+                carType: vItem.carType || carType || 'Sedan',
+                customCarNumber: vItem.customCarNumber || '',
+                driver: vItem.driver || null,
+                customDriverName: vItem.customDriverName || '',
+                vehicle: vItem.vehicle || null,
+                itinerary: dText,
+                duty: dText,
+                dayNo: i + 1,
+                carIndex: vIdx + 1,
+                pickupPoint: pickupPoint || hotel || '',
+                revenue: (i === 0 && vIdx === 0) ? totalRev : 0,
+                advancePaid: (i === 0 && vIdx === 0) ? advance : 0,
+                km: km || '',
+                cOut: cOut || '',
+                paymentStatus: (advance >= totalRev && totalRev > 0) ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'Pending'),
+                status: status || (vItem.driver || vItem.customDriverName ? 'Assigned' : 'Scheduled'),
+                leadId: leadId || null,
+                bookingId: bookingId || null,
+                bookingRef: bookingRef || null,
+                guestRemarks: guestRemarks || '',
+                isOutsideCar: isOutside,
+                vendorName: vItem.vendorName || '',
+                ownerName: vItem.vendorName || '',
+                vendorPayout: vPayout,
+                isDirectBooking: !leadId
+            });
+
+            if (isOutside) {
+                try {
+                    await syncOutsideCarFromDuty(duty, createdBooking);
+                } catch (scErr) {
+                    console.error('Error syncing outside vehicle in createDRSDuty:', scErr);
+                }
+            }
+
+            createdDuties.push(duty);
+        }
     }
 
     const firstDuty = createdDuties[0];
@@ -744,64 +797,12 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                 // CASCADE SYNC 2.5: SYNC OUTSIDE CAR / VENDOR INTO VEHICLE MODEL
                 // -------------------------------------------------------------
                 try {
-                    const effCarNo = (effectiveVehicleNumber || '').trim().toUpperCase();
-                    const isOutsideDuty = Boolean(
-                        updatedDuty.isOutsideCar ||
-                        updatedDuty.vendorName ||
-                        updatedDuty.ownerName ||
-                        (effCarNo && !effectiveVehicleId)
-                    );
-                    const finalVendor = updatedDuty.vendorName || updatedDuty.ownerName || '';
-                    const finalPayout = Number(updatedDuty.vendorPayout) || 0;
-
-                    if (isOutsideDuty && effCarNo) {
-                        const dateStr = updatedDuty.date ? new Date(updatedDuty.date).toISOString().split('T')[0] : '';
-                        const bkgCodePart = String(updatedDuty.bookingId || updatedDuty._id).slice(-6);
-                        const carKey = `${effCarNo}#${dateStr || 'duty'}#${bkgCodePart}`;
-
-                        let outVeh = await Vehicle.findOne({
-                            company: updatedDuty.company,
-                            isOutsideCar: true,
-                            $or: [
-                                { carNumber: carKey },
-                                { carNumber: { $regex: new RegExp(`^${effCarNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#${dateStr || ''}`, 'i') } }
-                            ]
-                        });
-
-                        const vehPayload = {
-                            carNumber: outVeh?.carNumber || carKey,
-                            model: updatedDuty.carType || 'Sedan',
-                            ownerName: finalVendor || outVeh?.ownerName || 'Outside Vendor',
-                            buyAmount: finalPayout || outVeh?.buyAmount || 0,
-                            dutyAmount: finalPayout || outVeh?.buyAmount || (outVeh?.dutyAmount || 0),
-                            revenue: Number(updatedDuty.revenue) || 0,
-                            driverName: effectiveDriverName || outVeh?.driverName || '',
-                            guestName: updatedDuty.clientName || '',
-                            dutyType: updatedDuty.duty || updatedDuty.itinerary || 'Scheduled Duty',
-                            dutyTime: updatedDuty.time || '09:00 AM',
-                            property: updatedDuty.hotel || updatedDuty.pickupPoint || '',
-                            transactionType: 'Buy',
-                            vehicleSource: 'External',
-                            isOutsideCar: true,
-                            permitType: 'Contract',
-                            carType: 'Other',
-                            company: updatedDuty.company,
-                            status: 'active',
-                            createdAt: updatedDuty.date ? new Date(updatedDuty.date) : new Date()
-                        };
-
-                        if (outVeh) {
-                            Object.assign(outVeh, vehPayload);
-                            await outVeh.save();
-                        } else {
-                            await Vehicle.create(vehPayload);
-                        }
-                    }
+                    const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+                    await syncOutsideCarFromDuty(updatedDuty, bkg);
                 } catch (outErr) {
                     console.error('Error syncing outside vehicle in updateDRSDuty:', outErr);
                 }
 
-                // -------------------------------------------------------------
                 // CASCADE SYNC 3: CLIENT (Clients Directory / Ledger)
                 // -------------------------------------------------------------
                 if (bkg.client) {
@@ -886,6 +887,13 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
         } catch (leadClientErr) {
             console.error('Error syncing standalone DRS update to Lead/Client:', leadClientErr);
         }
+    }
+
+        if (!bkg) {
+        try {
+            const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+            await syncOutsideCarFromDuty(updatedDuty, null);
+        } catch (_) {}
     }
 
     res.json(updatedDuty);

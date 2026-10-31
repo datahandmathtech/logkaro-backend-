@@ -1075,54 +1075,6 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 } catch (_) {}
             }
 
-            // Sync Outside Car / Vendor into Vehicle collection (for Buy/Sell outside cars & vendor reporting)
-            if (isOutsideDay && vehicleNumber) {
-                try {
-                    const bkgCodePart = String(booking.bookingCode || booking.bookingId || booking._id).slice(-6);
-                    const carKey = `${cleanCarNum}#${dateStr || 'duty'}#${bkgCodePart}`;
-
-                    let outVeh = await Vehicle.findOne({
-                        company: booking.company,
-                        isOutsideCar: true,
-                        $or: [
-                            { carNumber: carKey },
-                            { carNumber: { $regex: new RegExp(`^${cleanCarNum.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}#${dateStr || ''}`, 'i') } }
-                        ]
-                    });
-
-                    const vehPayload = {
-                        carNumber: outVeh?.carNumber || carKey,
-                        model: day.vehicleType || booking.vehicleType || 'Sedan',
-                        ownerName: vendorName || outVeh?.ownerName || 'Outside Vendor',
-                        buyAmount: vendorPayout || outVeh?.buyAmount || 0,
-                        dutyAmount: day.amount !== undefined ? Number(day.amount) : (outVeh?.dutyAmount || 0),
-                        driverName: driverName || outVeh?.driverName || '',
-                        guestName: booking.clientName || '',
-                        dutyType: dutyText,
-                        dutyTime: day.time || '09:00 AM',
-                        property: day.pickupPoint || booking.pickupLocation || '',
-                        dropLocation: booking.dropPoint || booking.dropLocation || '',
-                        transactionType: 'Buy',
-                        vehicleSource: 'External',
-                        isOutsideCar: true,
-                        permitType: 'Contract',
-                        carType: 'Other',
-                        company: booking.company,
-                        status: 'active',
-                        createdAt: day.date ? new Date(day.date) : new Date()
-                    };
-
-                    if (outVeh) {
-                        Object.assign(outVeh, vehPayload);
-                        await outVeh.save();
-                    } else {
-                        await Vehicle.create(vehPayload);
-                    }
-                } catch (outVehErr) {
-                    console.error('Error syncing outside vehicle in assignBookingDrivers:', outVehErr);
-                }
-            }
-
             if (matchingDuty) {
                 matchingDuty.bookingRef = booking._id;
                 matchingDuty.bookingId = booking.bookingId || booking.clientCode;
@@ -1158,6 +1110,10 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     matchingDuty.vendorPayout = 0;
                 }
                 await matchingDuty.save();
+                try {
+                    const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+                    await syncOutsideCarFromDuty(matchingDuty, booking);
+                } catch (scErr) { console.error('Error syncing outside car in matchingDuty:', scErr); }
                 syncedDutyIds.push(matchingDuty._id);
             } else {
                 const newDuty = await DRSDuty.create({
@@ -1191,6 +1147,10 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     guestFuelFilled: Boolean(booking.guestFuelFilled),
                     guestFuelAmount: Number(booking.guestFuelAmount) || 0
                 });
+                try {
+                    const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+                    await syncOutsideCarFromDuty(newDuty, booking);
+                } catch (scErr) { console.error('Error syncing outside car in newDuty:', scErr); }
                 syncedDutyIds.push(newDuty._id);
             }
         }

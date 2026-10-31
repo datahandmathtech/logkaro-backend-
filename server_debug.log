@@ -593,3 +593,31 @@
 [2026-10-30T10:50:31.328Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Company: 6ae2e06d43e75b94668a4e82
 [2026-10-30T10:50:31.381Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Comp: 6ae2e06d43e75b94668a4e82, Found: 1 vehicles
 [2026-10-30T10:50:31.453Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ27AS2029
+[2026-10-30T10:52:35.867Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Company: 6ae2e06d43e75b94668a4e82
+[2026-10-30T10:52:35.917Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Comp: 6ae2e06d43e75b94668a4e82, Found: 1 vehicles
+[2026-10-30T10:52:35.963Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ27AS2029
+[2026-10-30T10:52:47.235Z] Login attempt started
+[2026-10-30T10:52:47.236Z] Login request for: 1221
+[2026-10-30T10:52:47.275Z] Login failed: User [1221] not found in standard lookup.
+[2026-10-30T10:52:47.311Z] [SSO] User not found in Main Fleet DB. Checking other CRMs...
+[2026-10-30T10:52:51.779Z] Login attempt started
+[2026-10-30T10:52:51.780Z] Login request for: 122
+[2026-10-30T10:52:51.837Z] User found: Abhay123 (Role: Driver)
+[2026-10-30T10:52:51.932Z] Match debug: receivedPwdLen=3, dbHashStart=$2a$10$syV, isMatch=true
+[2026-10-30T10:52:51.932Z] Password matched
+[2026-10-30T10:52:51.932Z] DEBUG: Company status in DB is: "trial" (Normalized: "trial")
+[2026-10-30T10:52:52.123Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Company: 6ae2e06d43e75b94668a4e82
+[2026-10-30T10:52:52.193Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Comp: 6ae2e06d43e75b94668a4e82, Found: 1 vehicles
+[2026-10-30T10:52:52.249Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ27AS2029
+[2026-10-30T11:12:52.111Z] Login attempt started
+[2026-10-30T11:12:52.112Z] Login request for: 122
+[2026-10-30T11:12:52.163Z] User found: Abhay123 (Role: Driver)
+[2026-10-30T11:12:52.242Z] Match debug: receivedPwdLen=3, dbHashStart=$2a$10$syV, isMatch=true
+[2026-10-30T11:12:52.242Z] Password matched
+[2026-10-30T11:12:52.242Z] DEBUG: Company status in DB is: "trial" (Normalized: "trial")
+[2026-10-30T11:13:42.519Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Company: 6ae2e06d43e75b94668a4e82
+[2026-10-30T11:13:42.615Z] DRIVER_CTRL: getDriverDashboard - User: 6ae2e590fe8db93060a03a58, Comp: 6ae2e06d43e75b94668a4e82, Found: 1 vehicles
+[2026-10-30T11:13:42.725Z] DRIVER_CTRL: getDriverDashboard - Final Status: active, Current Car: RJ27AS2029
+[2026-10-31T04:50:29.487Z] CRON: Cron Jobs Initialized
+[2026-10-31T05:00:00.516Z] CRON: Starting Daily Warranty Expiry Check
+[2026-10-31T05:00:10.533Z] CRON: ERROR in Warranty Expiry Check: Operation `partswarranties.updateMany()` buffering timed out after 10000ms

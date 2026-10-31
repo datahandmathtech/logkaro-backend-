@@ -82,6 +82,15 @@ const drsDutySchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    outsideVehicleRef: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Vehicle',
+        default: null
+    },
+    carIndex: {
+        type: Number,
+        default: 1
+    },
     vendorName: {
         type: String,
         default: ''

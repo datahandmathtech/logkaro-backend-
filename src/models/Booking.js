@@ -22,7 +22,13 @@ const bookingItinerarySchema = new mongoose.Schema({
     driverPhone: { type: String, default: '' },
     vehicle: { type: mongoose.Schema.Types.ObjectId, ref: 'Vehicle', default: null },
     vehicleId: { type: String, default: '' },
-    vehicleNumber: { type: String, default: '' }
+    vehicleNumber: { type: String, default: '' },
+    carIndex: { type: Number, default: 1 },
+    outsideVehicleRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Vehicle', default: null },
+    isOutsideCar: { type: Boolean, default: false },
+    ownerName: { type: String, default: '' },
+    vendorName: { type: String, default: '' },
+    buyAmount: { type: Number, default: 0 }
 }, { strict: false });
 
 const bookingSchema = new mongoose.Schema({

@@ -39,6 +39,24 @@ const vehicleSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    bookingRef: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Booking',
+        default: null
+    },
+    drsRef: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'DRSDuty',
+        default: null
+    },
+    itineraryDayNo: {
+        type: Number,
+        default: 1
+    },
+    bookingCode: {
+        type: String,
+        default: ''
+    },
     driverName: {
         type: String // For outside cars
     },
