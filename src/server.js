@@ -33,6 +33,17 @@ connectDB().then(async () => {
     const initCronJobs = require('./utils/cronJobs');
     initCronJobs();
 
+    try {
+        const Lead = require('./models/Lead');
+        const Booking = require('./models/Booking');
+        await Lead.updateMany({ source: { $regex: /^Live DRS \(/i } }, { $set: { source: 'Live DRS' } });
+        await Booking.updateMany({ source: { $regex: /^Live DRS \(/i } }, { $set: { source: 'Live DRS' } });
+        await Lead.updateMany({ source: 'JustDial' }, { $set: { source: 'Justdial' } });
+        await Booking.updateMany({ source: 'JustDial' }, { $set: { source: 'Justdial' } });
+    } catch (migErr) {
+        console.error('Source cleanup error:', migErr);
+    }
+
     console.log('Database connected, seeding completed, and Cron Jobs initialized.');
 }).catch(err => console.error('DB Initial Error:', err.message));
 
