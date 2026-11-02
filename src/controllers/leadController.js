@@ -459,14 +459,74 @@ const deleteLead = asyncHandler(async (req, res) => {
         throw new Error('Lead not found');
     }
 
-    // If confirmed or has linked booking/duties, cascade clean them up
+    // Cascade clean associated booking, DRS duties, and ledgers
     try {
-        if (lead.bookingRef || lead.status === 'Confirmed') {
-            await Booking.deleteMany({ $or: [{ lead: lead._id }, { _id: lead.bookingRef }] });
-            await DRSDuty.deleteMany({ leadId: lead._id });
-            await LedgerEntry.deleteMany({ referenceId: lead._id });
-        }
-        await removeFinancialTransaction({ sourceId: lead._id });
+        const BankTransaction = require('../models/BankTransaction');
+        const CashTransaction = require('../models/CashTransaction');
+        const DRSDuty = require('../models/DRSDuty');
+        const LedgerEntry = require('../models/LedgerEntry');
+
+        const bookingIds = [];
+        if (lead.bookingRef) bookingIds.push(lead.bookingRef);
+        const linkedBookings = await Booking.find({
+            $or: [
+                { lead: lead._id },
+                { bookingCode: lead.leadId },
+                { clientCode: lead.leadId }
+            ]
+        });
+        linkedBookings.forEach(b => bookingIds.push(b._id));
+
+        await Booking.deleteMany({ _id: { $in: bookingIds } });
+        await DRSDuty.deleteMany({
+            $or: [
+                { leadId: lead._id },
+                { bookingRef: { $in: bookingIds } }
+            ]
+        });
+        await LedgerEntry.deleteMany({
+            $or: [
+                { referenceId: lead._id },
+                { referenceId: { $in: bookingIds } }
+            ]
+        });
+
+        // Update financial transactions to "Delete by system"
+        await BankTransaction.updateMany(
+            {
+                $or: [
+                    { leadRef: lead._id },
+                    { bookingRef: { $in: bookingIds } }
+                ]
+            },
+            {
+                $set: {
+                    description: 'Delete by system',
+                    guestName: 'Delete by system',
+                    clientRef: null,
+                    bookingRef: null,
+                    leadRef: null
+                }
+            }
+        );
+
+        await CashTransaction.updateMany(
+            {
+                $or: [
+                    { leadRef: lead._id },
+                    { bookingRef: { $in: bookingIds } }
+                ]
+            },
+            {
+                $set: {
+                    description: 'Delete by system',
+                    guestName: 'Delete by system',
+                    clientRef: null,
+                    bookingRef: null,
+                    leadRef: null
+                }
+            }
+        );
     } catch (cleanupErr) {
         console.error('Error cleaning up associated lead records:', cleanupErr);
     }

@@ -337,11 +337,33 @@ const punchIn = async (req, res) => {
             return res.status(400).json({ message: 'You have an active shift. Please punch out first.' });
         }
 
+        // Match assigned DRS Duty on this date for this driver/vehicle
+        let matchedDRSDuty = null;
+        try {
+            const DRSDuty = require('../models/DRSDuty');
+            const dtIST = DateTime.fromISO(today, { zone: 'Asia/Kolkata' });
+            const sDay = dtIST.startOf('day').toJSDate();
+            const eDay = dtIST.endOf('day').toJSDate();
+            matchedDRSDuty = await DRSDuty.findOne({
+                company: driver.company,
+                date: { $gte: sDay, $lte: eDay },
+                $or: [
+                    { driver: req.user._id },
+                    { vehicle: targetVehicleId }
+                ]
+            }).lean();
+        } catch (mErr) {
+            console.error('Error pre-matching DRS Duty on punchIn:', mErr);
+        }
+
         const attendance = await Attendance.create({
             driver: req.user._id,
             company: driver.company,
             vehicle: targetVehicleId,
             date: today,
+            guestName: matchedDRSDuty?.clientName || '',
+            dutyType: matchedDRSDuty?.duty || '',
+            dutyTime: matchedDRSDuty?.time || '',
             dailyWage: driver.dailyWage || 0, // Capture current wage
             punchIn: {
                 km: Number(km),
@@ -572,7 +594,13 @@ const punchOut = async (req, res) => {
 
         if (!attendance.pendingExpenses) attendance.pendingExpenses = [];
         
-        if (allowanceTAAmount > 0) {
+        const existingExpTypes = new Set(
+            (attendance.pendingExpenses || [])
+                .filter(e => e.status !== 'rejected')
+                .map(e => e.type)
+        );
+
+        if (allowanceTAAmount > 0 && !existingExpTypes.has('allowance_ta')) {
             attendance.pendingExpenses.push({
                 type: 'allowance_ta',
                 amount: allowanceTAAmount,
@@ -581,7 +609,7 @@ const punchOut = async (req, res) => {
             });
         }
         
-        if (nightStayAmount > 0) {
+        if (nightStayAmount > 0 && !existingExpTypes.has('allowance_night')) {
             attendance.pendingExpenses.push({
                 type: 'allowance_night',
                 amount: nightStayAmount,

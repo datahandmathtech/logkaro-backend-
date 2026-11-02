@@ -1223,29 +1223,67 @@ const deleteBooking = asyncHandler(async (req, res) => {
     // 2. Remove ledger entries
     await LedgerEntry.deleteMany({ referenceId: booking._id });
 
-    // 3. Reset linked lead if any
+    // 3. Completely delete linked lead and associated duties (Permanent delete from entire system)
     try {
         const Lead = require('../models/Lead');
-        await Lead.updateMany(
+        await Lead.deleteMany({
+            $or: [
+                { bookingRef: booking._id },
+                { bookingId: booking.bookingCode },
+                { bookingId: booking.bookingId },
+                { clientCode: booking.bookingCode },
+                { clientCode: booking.bookingId }
+            ]
+        });
+    } catch (err) {
+        console.error('Error deleting linked lead on booking delete:', err);
+    }
+
+    // 4. Update any associated Bank and Cash transactions to "Delete by system"
+    try {
+        const BankTransaction = require('../models/BankTransaction');
+        const CashTransaction = require('../models/CashTransaction');
+
+        await BankTransaction.updateMany(
             {
                 $or: [
                     { bookingRef: booking._id },
+                    { bookingId: booking.bookingCode },
                     { bookingId: booking.bookingId }
                 ]
             },
             {
                 $set: {
-                    bookingRef: null,
-                    status: 'Cancelled',
-                    notes: 'Associated booking deleted'
+                    description: 'Delete by system',
+                    guestName: 'Delete by system',
+                    clientRef: null,
+                    bookingRef: null
                 }
             }
         );
-    } catch (err) {
-        console.error('Error decoupling lead on booking delete:', err);
+
+        await CashTransaction.updateMany(
+            {
+                $or: [
+                    { bookingRef: booking._id },
+                    { bookingId: booking.bookingCode },
+                    { bookingId: booking.bookingId }
+                ]
+            },
+            {
+                $set: {
+                    description: 'Delete by system',
+                    guestName: 'Delete by system',
+                    clientRef: null,
+                    bookingRef: null
+                }
+            }
+        );
+    } catch (txErr) {
+        console.error('Error updating transactions on booking delete:', txErr);
     }
 
-    // 4. Delete the booking
+    // 5. Delete the booking
     await booking.deleteOne();
 
     res.json({ message: 'Booking and associated DRS duties deleted successfully' });
