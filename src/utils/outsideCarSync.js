@@ -21,17 +21,26 @@ async function syncOutsideCarFromDuty(duty, existingBooking = null) {
     const effCarNo = (duty.customCarNumber || (duty.vehicle && duty.vehicle.carNumber ? duty.vehicle.carNumber : '') || '').trim().toUpperCase();
     const isCompanyFleetCar = Boolean(duty.vehicle && !duty.isOutsideCar && !duty.vendorName);
 
-    const isOutsideDuty = !isCompanyFleetCar && Boolean(
-        duty.isOutsideCar ||
-        (duty.vendorName && duty.vendorName.trim()) ||
-        (duty.ownerName && duty.ownerName.trim()) ||
-        (effCarNo && !duty.vehicle)
-    );
-
     const finalVendor = (duty.vendorName || duty.ownerName || '').trim();
     const finalPayout = Number(duty.vendorPayout !== undefined ? duty.vendorPayout : duty.buyAmount) || 0;
 
-    // Case 1: Duty is NOT an outside car (switched to fleet or unassigned)
+    const hasRealPlate = effCarNo && !/^outside-?car$/i.test(effCarNo);
+    const hasRealPayout = finalPayout > 0;
+    const hasRealVendor = finalVendor && !/^outside vendor$/i.test(finalVendor);
+
+    // Only create an outside car if there is a real plate assigned, or a valid vendor with real payout
+    const isReadyForOutsideFleet = Boolean(
+        hasRealPlate ||
+        (hasRealVendor && hasRealPayout) ||
+        (hasRealPayout && effCarNo)
+    );
+
+    const isOutsideDuty = !isCompanyFleetCar && Boolean(
+        (duty.isOutsideCar || (duty.vendorName && duty.vendorName.trim()) || (duty.ownerName && duty.ownerName.trim()) || (effCarNo && !duty.vehicle)) &&
+        isReadyForOutsideFleet
+    );
+
+    // Case 1: Duty is NOT an outside car or not yet assigned (clean up dummy/existing outside vehicle)
     if (!isOutsideDuty) {
         if (duty.outsideVehicleRef) {
             try {
