@@ -156,7 +156,7 @@ const leadSchema = new mongoose.Schema({
     },
     priority: {
         type: String,
-        enum: ['Hot', 'Warm', 'Cold', 'Lost', 'Unassigned'],
+        enum: ['Hot', 'Warm', 'Cold', 'Lost', 'Unassigned', 'Travel Agent', 'Mixed Vehicle'],
         default: 'Unassigned'
     },
     status: {
