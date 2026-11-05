@@ -924,11 +924,23 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
             const driverId = day.driverId && day.driverId !== 'custom' && day.driverId !== '__custom__' ? day.driverId : null;
             let vehicleId = day.vehicleId && day.vehicleId !== 'custom' && day.vehicleId !== '__custom__' ? day.vehicleId : (day.vehicle || null);
             let vehicleNumber = day.vehicleNumber || day.customCarNumber || '';
-            const matchedFleet = findFleetVehicle(vehicleId, vehicleNumber);
+            const isExplicitOutside = Boolean(
+                day.isOutside ||
+                day.isOutsideCar ||
+                day.vehicleSource === 'External' ||
+                day.vehicleId === 'custom' ||
+                day.vehicleId === '__custom__' ||
+                (day.ownerName && day.ownerName.trim() && !/^company/i.test(day.ownerName)) ||
+                (day.buyAmount !== undefined && day.buyAmount !== '' && Number(day.buyAmount) > 0)
+            );
+            const matchedFleet = isExplicitOutside ? null : findFleetVehicle(vehicleId, vehicleNumber);
             const isCompanyFleetCar = Boolean(matchedFleet);
             if (matchedFleet) {
                 vehicleId = matchedFleet._id;
                 vehicleNumber = matchedFleet.carNumber;
+            } else if (isExplicitOutside) {
+                vehicleId = null;
+                if (!vehicleNumber) vehicleNumber = 'OUTSIDE-CAR';
             }
             const dutyText = day.duty || day.description || 'City Tour / Transfer';
             return {
@@ -1043,11 +1055,23 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
             const driverPhone = day.driverPhone || '';
             let vehicleId = day.vehicle;
             let vehicleNumber = day.vehicleNumber || '';
-            const matchedFleet = findFleetVehicle(vehicleId, vehicleNumber);
+            const isExplicitOutside = Boolean(
+                day.isOutside ||
+                day.isOutsideCar ||
+                day.vehicleSource === 'External' ||
+                day.vehicleId === 'custom' ||
+                day.vehicleId === '__custom__' ||
+                (day.ownerName && day.ownerName.trim() && !/^company/i.test(day.ownerName)) ||
+                (day.buyAmount !== undefined && day.buyAmount !== '' && Number(day.buyAmount) > 0)
+            );
+            const matchedFleet = isExplicitOutside ? null : findFleetVehicle(vehicleId, vehicleNumber);
             const isCompanyFleetCar = Boolean(matchedFleet);
             if (matchedFleet) {
                 vehicleId = matchedFleet._id;
                 vehicleNumber = matchedFleet.carNumber;
+            } else if (isExplicitOutside) {
+                vehicleId = null;
+                if (!vehicleNumber) vehicleNumber = 'OUTSIDE-CAR';
             }
             const dutyText = day.duty || day.description || 'Scheduled Duty';
             const hotelDisplay = day.pickupPoint || booking.pickupPoint || booking.source || 'Direct';
@@ -1124,10 +1148,14 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 matchingDuty.guestFuelAmount = Number(booking.guestFuelAmount) || 0;
                 if (isOutsideDay) {
                     matchingDuty.isOutsideCar = true;
+                    matchingDuty.vehicle = null;
+                    matchingDuty.customCarNumber = vehicleNumber;
                     if (vendorName) matchingDuty.vendorName = vendorName;
                     if (vendorPayout) matchingDuty.vendorPayout = vendorPayout;
                 } else if (isCompanyFleetCar) {
                     matchingDuty.isOutsideCar = false;
+                    matchingDuty.vehicle = vehicleId;
+                    matchingDuty.customCarNumber = vehicleNumber;
                     matchingDuty.vendorName = '';
                     matchingDuty.vendorPayout = 0;
                 }
@@ -1156,7 +1184,7 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     driver: driverId,
                     customDriverName: driverName,
                     driverMobile: driverPhone,
-                    vehicle: vehicleId,
+                    vehicle: isCompanyFleetCar ? vehicleId : null,
                     customCarNumber: vehicleNumber,
                     revenue: day.amount || 0,
                     km: day.km || '',
