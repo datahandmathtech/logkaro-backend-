@@ -28,15 +28,15 @@ async function syncOutsideCarFromDuty(duty, existingBooking = null) {
     const hasRealPayout = finalPayout > 0;
     const hasRealVendor = finalVendor && !/^outside vendor$/i.test(finalVendor);
 
-    // Only create an outside car if there is a real plate assigned, or a valid vendor with real payout
+    // Create outside car if there is a real plate assigned, or a valid vendor, OR ANY real payout entered (> 0)
     const isReadyForOutsideFleet = Boolean(
         hasRealPlate ||
-        (hasRealVendor && hasRealPayout) ||
-        (hasRealPayout && effCarNo)
+        hasRealPayout ||
+        hasRealVendor
     );
 
     const isOutsideDuty = !isCompanyFleetCar && Boolean(
-        (duty.isOutsideCar || (duty.vendorName && duty.vendorName.trim()) || (duty.ownerName && duty.ownerName.trim()) || (effCarNo && !duty.vehicle)) &&
+        (duty.isOutsideCar || (duty.vendorName && duty.vendorName.trim()) || (duty.ownerName && duty.ownerName.trim()) || (effCarNo && !duty.vehicle) || hasRealPayout) &&
         isReadyForOutsideFleet
     );
 

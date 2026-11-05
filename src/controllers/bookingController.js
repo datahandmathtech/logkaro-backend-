@@ -1068,6 +1068,7 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
 
             const cleanCarNum = String(vehicleNumber || '').trim().toUpperCase();
             const normCarNum = normalizePlate(vehicleNumber);
+            const vendorPayout = !isCompanyFleetCar && day.buyAmount !== undefined && day.buyAmount !== '' ? Number(day.buyAmount) : 0;
 
             // Strictly exclude fleet vehicles from being classified as Outside Cars
             const isOutsideDay = !isCompanyFleetCar && Boolean(
@@ -1075,10 +1076,13 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 day.isOutsideCar ||
                 (day.vehicleSource === 'External') ||
                 (day.ownerName && day.ownerName.trim() !== '') ||
-                (cleanCarNum && (!vehicleId || day.vehicleId === 'custom'))
+                (cleanCarNum && (!vehicleId || day.vehicleId === 'custom')) ||
+                (vendorPayout > 0)
             );
-            const vendorName = isCompanyFleetCar ? '' : (day.ownerName || day.vendorName || '');
-            const vendorPayout = !isCompanyFleetCar && day.buyAmount !== undefined && day.buyAmount !== '' ? Number(day.buyAmount) : 0;
+            const vendorName = isCompanyFleetCar ? '' : (day.ownerName || day.vendorName || (isOutsideDay ? 'Outside Vendor' : ''));
+            if (isOutsideDay && (!vehicleNumber || vehicleNumber === '')) {
+                vehicleNumber = 'OUTSIDE-CAR';
+            }
 
             // If it is a company fleet car, proactively clean up any accidental duplicate outside car entries
             if (isCompanyFleetCar && normCarNum) {
