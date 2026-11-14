@@ -4030,11 +4030,24 @@ const syncFuelToClientLedger = async (fuelEntry) => {
             }
 
             if (linkedBooking) {
+                if (!fuelEntry.booking) {
+                    await Fuel.findByIdAndUpdate(fuelEntry._id, { booking: linkedBooking._id });
+                    fuelEntry.booking = linkedBooking._id;
+                }
+
+                const bkgStart = linkedBooking.travelStartDate ? new Date(linkedBooking.travelStartDate) : null;
+                const bkgEnd = linkedBooking.travelEndDate ? new Date(linkedBooking.travelEndDate) : bkgStart;
+                if (bkgStart) { bkgStart.setHours(0, 0, 0, 0); bkgStart.setDate(bkgStart.getDate() - 2); }
+                if (bkgEnd) { bkgEnd.setHours(23, 59, 59, 999); bkgEnd.setDate(bkgEnd.getDate() + 2); }
+
                 const allFuelForBooking = await Fuel.find({
                     company: fuelEntry.company,
                     $or: [
-                        { client: clientDoc._id },
-                        { booking: linkedBooking._id }
+                        { booking: linkedBooking._id },
+                        ...(bkgStart && bkgEnd ? [{
+                            client: clientDoc._id,
+                            date: { $gte: bkgStart, $lte: bkgEnd }
+                        }] : [{ _id: fuelEntry._id }])
                     ],
                     paymentSource: { $regex: /guest/i }
                 });
@@ -4087,12 +4100,20 @@ const removeFuelFromClientLedger = async (fuelEntry) => {
 
                     if (bkg) {
                         const FuelModel = require('../models/Fuel');
+                        const bkgStart = bkg.travelStartDate ? new Date(bkg.travelStartDate) : null;
+                        const bkgEnd = bkg.travelEndDate ? new Date(bkg.travelEndDate) : bkgStart;
+                        if (bkgStart) { bkgStart.setHours(0, 0, 0, 0); bkgStart.setDate(bkgStart.getDate() - 2); }
+                        if (bkgEnd) { bkgEnd.setHours(23, 59, 59, 999); bkgEnd.setDate(bkgEnd.getDate() + 2); }
+
                         const allFuel = await FuelModel.find({
                             _id: { $ne: fuelEntry._id },
                             company: fuelEntry.company,
                             $or: [
-                                { client: clientDoc._id },
-                                { booking: bkg._id }
+                                { booking: bkg._id },
+                                ...(bkgStart && bkgEnd ? [{
+                                    client: clientDoc._id,
+                                    date: { $gte: bkgStart, $lte: bkgEnd }
+                                }] : [{ _id: fuelEntry._id }])
                             ],
                             paymentSource: { $regex: /guest/i }
                         });
@@ -4484,7 +4505,7 @@ const getPendingAllowances = asyncHandler(async (req, res) => {
                 formattedAllowances.push({
                     _id: exp._id,
                     attendanceId: doc._id,
-                    date: exp.createdAt || doc.date,
+                    date: doc.date || exp.dutyDate || exp.date || (doc.punchIn?.time ? new Date(doc.punchIn.time).toISOString().split('T')[0] : exp.createdAt),
                     driver: doc.driver?.name || 'Unknown',
                     carNumber: doc.vehicle?.carNumber || 'Unknown',
                     amount: exp.amount,

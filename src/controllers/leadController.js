@@ -73,6 +73,64 @@ const getLeads = asyncHandler(async (req, res) => {
         ]).catch(e => {
             console.error('Error auto-moving expired/cancelled leads to Lost:', e);
         });
+
+        // Auto-heal/backfill any Confirmed Bookings (e.g. from Live DRS) missing a linked Lead document
+        (async () => {
+            try {
+                const BookingModel = require('../models/Booking');
+                const unlinkedBookings = await BookingModel.find({
+                    company: compFilter,
+                    lead: null,
+                    bookingStatus: { $ne: 'Cancelled' }
+                }).limit(30);
+
+                for (const b of unlinkedBookings) {
+                    try {
+                        const code = b.bookingId || b.clientCode;
+                        if (!code) continue;
+                        let existingLead = await Lead.findOne({
+                            company: b.company,
+                            $or: [{ clientCode: code }, { bookingId: code }, { leadId: code }]
+                        });
+                        if (!existingLead) {
+                            const totalRev = Number(b.totalAmount || b.packagePrice) || 0;
+                            const advance = Number(b.advancePaid) || 0;
+                            existingLead = await Lead.create({
+                                leadId: code,
+                                clientCode: code,
+                                company: b.company,
+                                client: b.client,
+                                clientName: b.clientName || 'Guest (TBA)',
+                                mobileNumber: b.mobileNumber || 'TBA',
+                                salesPerson: b.salesPerson || 'Operations',
+                                bookingReference: 'Direct',
+                                source: b.source || 'Live DRS',
+                                leadDate: b.bookingDate || b.travelStartDate || b.createdAt,
+                                advanceDate: b.advanceDate || b.bookingDate || b.travelStartDate,
+                                advancePayment: advance,
+                                totalAmount: totalRev,
+                                status: 'Confirmed',
+                                priority: 'Hot',
+                                bookingId: code,
+                                bookingRef: b._id,
+                                travelStartDate: b.travelStartDate || new Date(),
+                                travelEndDate: b.travelEndDate || b.travelStartDate || new Date(),
+                                carType: b.vehicleType || 'Sedan',
+                                numberOfCars: b.numberOfCars || 1,
+                                vehicleType: b.vehicleType || 'Sedan',
+                                itinerary: b.itinerary || []
+                            });
+                        }
+                        b.lead = existingLead._id;
+                        await b.save();
+                    } catch (bkgErr) {
+                        console.error('Error auto-syncing Lead for booking:', bkgErr);
+                    }
+                }
+            } catch (err) {
+                console.error('Error checking unlinked bookings:', err);
+            }
+        })();
     }
 
     let query = { company: companyId };
@@ -90,6 +148,7 @@ const getLeads = asyncHandler(async (req, res) => {
     }
 
     if (search) {
+        const term = search.trim();
         query.$or = [
             { clientName: { $regex: search, $options: 'i' } },
             { mobileNumber: { $regex: search, $options: 'i' } },
@@ -99,6 +158,54 @@ const getLeads = asyncHandler(async (req, res) => {
             { travelAgentName: { $regex: search, $options: 'i' } },
             { travelAgentMobile: { $regex: search, $options: 'i' } }
         ];
+
+        // Ensure direct bookings (e.g. 11/32 created in Live DRS) are instantly found and linked
+        try {
+            const BookingModel = require('../models/Booking');
+            const matchedBkg = await BookingModel.findOne({
+                company: companyId,
+                $or: [{ bookingId: term }, { clientCode: term }]
+            });
+            if (matchedBkg) {
+                let matchedLead = await Lead.findOne({
+                    company: companyId,
+                    $or: [{ clientCode: term }, { bookingId: term }, { leadId: term }]
+                });
+                if (!matchedLead) {
+                    const totalRev = Number(matchedBkg.totalAmount || matchedBkg.packagePrice) || 0;
+                    const advance = Number(matchedBkg.advancePaid) || 0;
+                    matchedLead = await Lead.create({
+                        leadId: term,
+                        clientCode: term,
+                        company: matchedBkg.company,
+                        client: matchedBkg.client,
+                        clientName: matchedBkg.clientName || 'Guest (TBA)',
+                        mobileNumber: matchedBkg.mobileNumber || 'TBA',
+                        salesPerson: matchedBkg.salesPerson || 'Operations',
+                        bookingReference: 'Direct',
+                        source: matchedBkg.source || 'Live DRS',
+                        leadDate: matchedBkg.bookingDate || matchedBkg.travelStartDate || matchedBkg.createdAt,
+                        advanceDate: matchedBkg.advanceDate || matchedBkg.bookingDate || matchedBkg.travelStartDate,
+                        advancePayment: advance,
+                        totalAmount: totalRev,
+                        status: 'Confirmed',
+                        priority: 'Hot',
+                        bookingId: term,
+                        bookingRef: matchedBkg._id,
+                        travelStartDate: matchedBkg.travelStartDate || new Date(),
+                        travelEndDate: matchedBkg.travelEndDate || matchedBkg.travelStartDate || new Date(),
+                        carType: matchedBkg.vehicleType || 'Sedan',
+                        numberOfCars: matchedBkg.numberOfCars || 1,
+                        vehicleType: matchedBkg.vehicleType || 'Sedan',
+                        itinerary: matchedBkg.itinerary || []
+                    });
+                    matchedBkg.lead = matchedLead._id;
+                    await matchedBkg.save();
+                }
+            }
+        } catch (searchBkgErr) {
+            console.error('Error auto-syncing Lead for searched booking code:', searchBkgErr);
+        }
     }
 
     let leads = await Lead.find(query).sort({ createdAt: -1 }).lean();

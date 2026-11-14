@@ -605,6 +605,8 @@ const punchOut = async (req, res) => {
                 type: 'allowance_ta',
                 amount: allowanceTAAmount,
                 status: 'pending',
+                date: attendance.date,
+                dutyDate: attendance.date,
                 createdAt: new Date()
             });
         }
@@ -614,6 +616,8 @@ const punchOut = async (req, res) => {
                 type: 'allowance_night',
                 amount: nightStayAmount,
                 status: 'pending',
+                date: attendance.date,
+                dutyDate: attendance.date,
                 createdAt: new Date()
             });
         }

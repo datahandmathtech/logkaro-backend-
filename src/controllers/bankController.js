@@ -218,7 +218,8 @@ const addBankTransaction = asyncHandler(async (req, res) => {
         try {
             if (resolvedBooking) {
                 resolvedBooking.advancePaid = (Number(resolvedBooking.advancePaid) || 0) + numAmount;
-                resolvedBooking.balanceDue = Math.max(0, (Number(resolvedBooking.totalAmount) || 0) - resolvedBooking.advancePaid);
+                const fuelDed = (resolvedBooking.guestFuelFilled || Number(resolvedBooking.guestFuelAmount) > 0) ? (Number(resolvedBooking.guestFuelAmount) || 0) : 0;
+                resolvedBooking.balanceDue = Math.max(0, (Number(resolvedBooking.totalAmount) || 0) - resolvedBooking.advancePaid - fuelDed);
                 resolvedBooking.paymentStatus = resolvedBooking.balanceDue <= 0 ? 'Full Received' : 'Partial';
                 await resolvedBooking.save();
             }

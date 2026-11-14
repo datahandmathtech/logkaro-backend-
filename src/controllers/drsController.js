@@ -84,6 +84,15 @@ const getDRSDuties = asyncHandler(async (req, res) => {
 
     // Enrich missing vendorName / ownerName from linked booking itinerary or vehicle
     for (const d of duties) {
+        // Company fleet vehicle safety check: Never treat company cars as outside vehicles
+        if (d.vehicle && !d.vehicle.isOutsideCar) {
+            d.isOutsideCar = false;
+            d.vendorName = '';
+            d.ownerName = '';
+            d.vendorPayout = 0;
+            continue;
+        }
+
         if (!d.vendorName && !d.ownerName) {
             if (d.vehicle?.ownerName) {
                 d.vendorName = d.vehicle.ownerName;
@@ -138,7 +147,8 @@ const createDRSDuty = asyncHandler(async (req, res) => {
 
         // 1. Client resolution
         let client = null;
-        if (mobileNumber && mobileNumber !== 'TBA') {
+        const cleanM1 = String(mobileNumber || '').replace(/[^0-9]/g, '');
+        if (cleanM1.length >= 10 && !cleanM1.startsWith('0000000000')) {
             client = await Client.findOne({ company, mobile: mobileNumber });
         }
         if (!client) {
@@ -310,8 +320,9 @@ const createDRSDuty = asyncHandler(async (req, res) => {
         });
 
         // Automatically create and link Lead so DRS direct bookings reflect in Sales Leads and Conversion sheet
+        let createdLead = null;
         try {
-            const createdLead = await Lead.create({
+            createdLead = await Lead.create({
                 leadId: clientCode,
                 clientCode: clientCode,
                 company,
@@ -323,24 +334,97 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                 bookingReference: 'Direct',
                 source: req.body.source ? String(req.body.source).trim() : (hotel ? 'Hotel' : 'Walk-in'),
                 leadDate: dutyDate,
-                advanceDate: advance > 0 ? dutyDate : dutyDate,
-                advanceAmount: advance || 0,
+                advanceDate: advance > 0 ? dutyDate : null,
+                advancePayment: advance || 0,
                 totalAmount: totalRev,
                 status: 'Confirmed',
-                priority: 'High',
+                priority: 'Hot',
                 bookingId: clientCode,
+                bookingRef: createdBooking._id,
                 travelStartDate: dutyDate,
                 travelEndDate: endDateObj,
+                carType: displayVehicleType || (incomingVehicles[0] && incomingVehicles[0].carType) || 'Sedan',
+                numberOfCars: numCars || 1,
                 vehicleType: displayVehicleType,
-                itinerary: bookingItinerary
+                itinerary: bookingItinerary,
+                notes: notes || guestRemarks || 'Direct Instant Booking from Live DRS'
             });
             createdBooking.lead = createdLead._id;
             await createdBooking.save();
+            leadId = createdLead.leadId;
         } catch (leadErr) {
             console.error('Error creating linked Lead from Live DRS booking:', leadErr);
         }
 
+        // Link Ledger Entries to createdBooking
+        try {
+            await LedgerEntry.updateMany(
+                { client: client._id, referenceId: null, description: { $regex: clientCode } },
+                { $set: { referenceId: createdBooking._id } }
+            );
+        } catch (ledgerSyncErr) {
+            console.error('Error updating ledger reference for direct booking:', ledgerSyncErr);
+        }
+
         bookingRef = createdBooking._id;
+    } else if (!createConfirmedBooking && !bookingRef && !bookingId) {
+        // Direct inquiry / unconfirmed DRS booking -> Create an Open Lead in Lead Generation
+        try {
+            const clientCode = await getNextClientCode(company, dutyDate);
+            bookingId = clientCode;
+            leadId = clientCode;
+
+            let client = null;
+            const cleanM2 = String(mobileNumber || '').replace(/[^0-9]/g, '');
+            if (cleanM2.length >= 10 && !cleanM2.startsWith('0000000000')) {
+                client = await Client.findOne({ company, mobile: mobileNumber });
+            }
+            if (!client) {
+                client = await Client.create({
+                    company,
+                    name: clientName || 'Guest (TBA)',
+                    mobile: (mobileNumber && mobileNumber !== 'TBA') ? mobileNumber : `DRS-${Date.now().toString().slice(-6)}`,
+                    clientType: 'Direct',
+                    totalBilled: 0,
+                    totalPaid: advance,
+                    balance: 0
+                });
+            }
+
+            const incomingVehiclesForOpen = (Array.isArray(req.body.vehicles) && req.body.vehicles.length > 0)
+                ? req.body.vehicles
+                : [{ carType: carType || 'Sedan' }];
+            const numCarsOpen = incomingVehiclesForOpen.length;
+            const displayVehicleTypeOpen = incomingVehiclesForOpen.map(v => v.carType || 'Sedan').filter((val, idx, arr) => arr.indexOf(val) === idx).join(' + ') || (carType || 'Sedan');
+
+            const openLead = await Lead.create({
+                leadId: clientCode,
+                clientCode: clientCode,
+                company,
+                client: client ? client._id : null,
+                clientName: clientName || 'Guest (TBA)',
+                mobileNumber: mobileNumber || 'TBA',
+                salesPerson: req.user ? req.user.name : 'Operations',
+                salesUser: req.user ? req.user._id : null,
+                bookingReference: 'Direct',
+                source: req.body.source ? String(req.body.source).trim() : (hotel ? 'Hotel' : 'Walk-in'),
+                leadDate: dutyDate,
+                advanceDate: advance > 0 ? dutyDate : null,
+                advancePayment: advance || 0,
+                totalAmount: totalRev,
+                status: 'New',
+                priority: 'Hot',
+                travelStartDate: dutyDate,
+                travelEndDate: endDateObj,
+                carType: displayVehicleTypeOpen || 'Sedan',
+                numberOfCars: numCarsOpen || 1,
+                vehicleType: displayVehicleTypeOpen,
+                notes: notes || guestRemarks || 'Direct Booking from Live DRS'
+            });
+            leadId = openLead.leadId;
+        } catch (unconfLeadErr) {
+            console.error('Error creating unconfirmed Lead from Live DRS:', unconfLeadErr);
+        }
     }
 
     // Create DRS Duties for each day and each vehicle
@@ -575,8 +659,24 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
         updatePayload.vendorPayout = Number(updatePayload.buyAmount) || 0;
     }
 
-    if (updatePayload.vendorName || updatePayload.ownerName || (!updatePayload.vehicle && updatePayload.customCarNumber)) {
-        updatePayload.isOutsideCar = true;
+    // Auto-match fleet vehicle if customCarNumber matches our company fleet
+    const plateDigits = String(updatePayload.customCarNumber || (duty.vehicle?.carNumber) || '').replace(/[^0-9]/g, '').slice(-4);
+    let matchedCompanyFleet = null;
+    if (plateDigits) {
+        matchedCompanyFleet = await Vehicle.findOne({
+            company: duty.company,
+            isOutsideCar: { $ne: true },
+            carNumber: { $regex: new RegExp(plateDigits) }
+        }).select('_id carNumber isOutsideCar').lean();
+    }
+
+    if (matchedCompanyFleet) {
+        updatePayload.vehicle = matchedCompanyFleet._id;
+        updatePayload.customCarNumber = matchedCompanyFleet.carNumber;
+        updatePayload.isOutsideCar = false;
+        updatePayload.vendorName = '';
+        updatePayload.ownerName = '';
+        updatePayload.vendorPayout = 0;
     } else if (updatePayload.vehicle) {
         const vehCheck = await Vehicle.findById(updatePayload.vehicle).select('isOutsideCar ownerName').lean();
         if (vehCheck && vehCheck.isOutsideCar) {
@@ -591,6 +691,8 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
             updatePayload.ownerName = '';
             updatePayload.vendorPayout = 0;
         }
+    } else if (updatePayload.vendorName || updatePayload.ownerName || (!updatePayload.vehicle && updatePayload.customCarNumber)) {
+        updatePayload.isOutsideCar = true;
     }
 
     const updatedDuty = await DRSDuty.findByIdAndUpdate(
@@ -818,10 +920,13 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                         await clientDoc.save();
                     }
                 } else if (updatedDuty.mobileNumber) {
-                    await Client.findOneAndUpdate(
-                        { company: updatedDuty.company, mobile: updatedDuty.mobileNumber },
-                        { $set: { name: updatedDuty.clientName } }
-                    );
+                    const cleanM3 = String(updatedDuty.mobileNumber || '').replace(/[^0-9]/g, '');
+                    if (cleanM3.length >= 10 && !cleanM3.startsWith('0000000000')) {
+                        await Client.findOneAndUpdate(
+                            { company: updatedDuty.company, mobile: updatedDuty.mobileNumber },
+                            { $set: { name: updatedDuty.clientName } }
+                        );
+                    }
                 }
 
                 // -------------------------------------------------------------
@@ -886,10 +991,13 @@ const updateDRSDuty = asyncHandler(async (req, res) => {
                 });
             }
             if (updatedDuty.mobileNumber) {
-                await Client.findOneAndUpdate(
-                    { company: updatedDuty.company, mobile: updatedDuty.mobileNumber },
-                    { $set: { name: updatedDuty.clientName } }
-                );
+                const cleanM4 = String(updatedDuty.mobileNumber || '').replace(/[^0-9]/g, '');
+                if (cleanM4.length >= 10 && !cleanM4.startsWith('0000000000')) {
+                    await Client.findOneAndUpdate(
+                        { company: updatedDuty.company, mobile: updatedDuty.mobileNumber },
+                        { $set: { name: updatedDuty.clientName } }
+                    );
+                }
             }
         } catch (leadClientErr) {
             console.error('Error syncing standalone DRS update to Lead/Client:', leadClientErr);
@@ -1012,7 +1120,8 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
 
     if (booking) {
         booking.advancePaid = (booking.advancePaid || 0) + numAmount;
-        booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid);
+        const fuelDed = (booking.guestFuelFilled || Number(booking.guestFuelAmount) > 0) ? (Number(booking.guestFuelAmount) || 0) : 0;
+        booking.balanceDue = Math.max(0, (booking.totalAmount || 0) - booking.advancePaid - fuelDed);
         if (markFullPaid || booking.balanceDue === 0) {
             booking.balanceDue = 0;
             booking.paymentStatus = 'Full Received';
@@ -1020,6 +1129,16 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
             booking.paymentStatus = 'Advance Received';
         }
         await booking.save();
+
+        if (booking.lead) {
+            try {
+                await Lead.findByIdAndUpdate(booking.lead, {
+                    advancePayment: booking.advancePaid
+                });
+            } catch (lSyncErr) {
+                console.error('Error syncing advance to linked Lead in collectDRSPayment:', lSyncErr);
+            }
+        }
 
         // Update Client Ledger & Balance
         let client = booking.client;
@@ -1038,7 +1157,7 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
                 amount: numAmount,
                 date: new Date(),
                 description: `Payment received for Booking ${booking.bookingId} (${duty.duty || 'Duty'}) via ${payMode} ${paymentReference ? `(Ref: ${paymentReference})` : ''}`,
-                referenceId: duty._id
+                referenceId: booking._id
             });
         }
 

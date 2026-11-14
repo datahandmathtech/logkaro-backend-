@@ -94,6 +94,36 @@ const getBookings = asyncHandler(async (req, res) => {
         .sort({ createdAt: -1 })
         .lean();
 
+    // Pre-aggregate all payments and advances from LedgerEntry to ensure balanceDue and advancePaid match Ledger statements 100%
+    const bkgIds = bookings.map(b => b._id).filter(Boolean);
+    const leadIds = bookings.map(b => b.lead?._id || b.lead).filter(Boolean);
+    const allRefIds = [...bkgIds, ...leadIds];
+
+    let ledgerTotalsByRef = new Map();
+    if (allRefIds.length > 0) {
+        try {
+            const ledgerRows = await LedgerEntry.aggregate([
+                {
+                    $match: {
+                        referenceId: { $in: allRefIds },
+                        type: { $in: ['Advance', 'Payment'] }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$referenceId',
+                        total: { $sum: '$amount' }
+                    }
+                }
+            ]);
+            ledgerRows.forEach(row => {
+                ledgerTotalsByRef.set(String(row._id), Number(row.total) || 0);
+            });
+        } catch (lAggErr) {
+            console.error('Error aggregating booking ledgers in getBookings:', lAggErr);
+        }
+    }
+
     const activeStatuses = new Set(['Confirmed', 'Ongoing', 'Scheduled', 'Invoiced']);
     const sanitizedBookings = bookings.map(bObj => {
         if (activeStatuses.has(bObj.bookingStatus)) {
@@ -102,9 +132,16 @@ const getBookings = asyncHandler(async (req, res) => {
                 bObj.bookingStatus = 'Completed';
             }
         }
+
+        const bkgLedgerPaid = (ledgerTotalsByRef.get(String(bObj._id)) || 0) + (bObj.lead?._id ? (ledgerTotalsByRef.get(String(bObj.lead._id)) || 0) : 0);
+        const effectivePaid = Math.max(Number(bObj.advancePaid) || 0, bkgLedgerPaid);
+        bObj.advancePaid = effectivePaid;
+
         const fuelDed = (bObj.guestFuelFilled || Number(bObj.guestFuelAmount) > 0) ? (Number(bObj.guestFuelAmount) || 0) : 0;
-        if (fuelDed > 0) {
-            bObj.balanceDue = Math.max(0, (Number(bObj.totalAmount) || 0) - (Number(bObj.advancePaid) || 0) - fuelDed);
+        const pkgAmt = Number(bObj.totalAmount || bObj.packagePrice) || 0;
+        bObj.balanceDue = Math.max(0, pkgAmt - effectivePaid - fuelDed);
+        if (pkgAmt > 0 && bObj.balanceDue <= 0) {
+            bObj.paymentStatus = 'Full Received';
         }
         return bObj;
     });
