@@ -6,7 +6,8 @@ const {
     updateDRSDuty,
     deleteDRSDuty,
     getDRSDutiesByVehicle,
-    collectDRSPayment
+    collectDRSPayment,
+    getDRSDutyPayments
 } = require('../controllers/drsController');
 const {
     syncFromSheetWebhook,
@@ -22,6 +23,9 @@ router.use(protect);
 
 router.route('/')
     .post(adminOrExecutive, createDRSDuty);
+
+router.route('/duty/:id/payments')
+    .get(adminOrExecutive, getDRSDutyPayments);
 
 router.route('/:companyId/by-vehicle')
     .get(adminOrExecutive, checkCompany, getDRSDutiesByVehicle);

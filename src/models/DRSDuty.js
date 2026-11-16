@@ -125,6 +125,15 @@ const drsDutySchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    paymentHistory: [{
+        amount: { type: Number, required: true },
+        date: { type: Date, default: Date.now },
+        paymentMode: { type: String, default: 'Cash' },
+        bankName: { type: String, default: '' },
+        bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'BankAccount', default: null },
+        reference: { type: String, default: '' },
+        notes: { type: String, default: '' }
+    }],
     guestFuelFilled: {
         type: Boolean,
         default: false

@@ -13,6 +13,7 @@ const { removeFinancialTransaction } = require('../services/transactionSyncServi
 const { getNextClientCode } = require('../models/Sequence');
 const asyncHandler = require('express-async-handler');
 const Lead = require('../models/Lead');
+const Event = require('../models/Event');
 const { applyGuestFuelFloor } = require('../utils/guestFuel');
 
 // @desc    Get DRS duties for a company by date, view, or date range
@@ -1116,7 +1117,15 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
     const { amount, paymentMode, bankAccountId, paymentReference, notes, markFullPaid } = req.body;
     const dutyId = req.params.id;
 
-    const duty = await DRSDuty.findById(dutyId);
+    let duty = await DRSDuty.findById(dutyId);
+    if (!duty) {
+        duty = await DRSDuty.findOne({
+            $or: [
+                { eventVehicleRef: dutyId },
+                { outsideVehicleRef: dutyId }
+            ]
+        });
+    }
     if (!duty) {
         res.status(404);
         throw new Error('Duty not found');
@@ -1184,16 +1193,46 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
             { paymentStatus: booking.paymentStatus }
         );
     } else {
-        // Direct duty without formal booking
-        duty.revenue = duty.revenue || 0;
-        const currentPaid = (duty.revenue > 0 && duty.paymentStatus === 'Full Received') ? duty.revenue : 0;
+        // Direct / Event duty without formal booking
+        duty.revenue = Number(duty.revenue) || 0;
+        const currentPaid = Number(duty.advancePaid) || 0;
         const newTotalPaid = currentPaid + numAmount;
-        if (markFullPaid || newTotalPaid >= duty.revenue) {
+        duty.advancePaid = newTotalPaid;
+
+        let bankNameStr = '';
+        if (bankAccountId) {
+            const bDoc = await BankAccount.findById(bankAccountId).select('bankName').lean();
+            if (bDoc?.bankName) bankNameStr = bDoc.bankName;
+        }
+        if (!Array.isArray(duty.paymentHistory)) duty.paymentHistory = [];
+        if (numAmount > 0) {
+            duty.paymentHistory.push({
+                amount: numAmount,
+                date: new Date(),
+                paymentMode: payMode,
+                bankName: bankNameStr,
+                bankAccountId: bankAccountId || null,
+                reference: paymentReference || '',
+                notes: notes || ''
+            });
+        }
+
+        if (markFullPaid || (duty.revenue > 0 && newTotalPaid >= duty.revenue)) {
             duty.paymentStatus = 'Full Received';
         } else if (newTotalPaid > 0) {
             duty.paymentStatus = 'Advance Received';
         }
         await duty.save();
+
+        if (duty.eventId && numAmount > 0) {
+            try {
+                await Event.findByIdAndUpdate(duty.eventId, {
+                    $inc: { amountReceived: numAmount }
+                });
+            } catch (evErr) {
+                console.error('Error syncing payment to Event:', evErr);
+            }
+        }
     }
 
     // Sync to Cash Book or Bank Book
@@ -1253,7 +1292,7 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
         }
     }
 
-    const updated = await DRSDuty.findById(dutyId)
+    const updated = await DRSDuty.findById(duty._id)
         .populate('driver', 'name mobile')
         .populate('vehicle', 'carNumber model type brand')
         .populate('leadId', 'clientName leadId status')
@@ -1271,11 +1310,104 @@ const collectDRSPayment = asyncHandler(async (req, res) => {
     });
 });
 
+// @desc    Get recorded payment history for a DRS / Event Duty
+// @route   GET /api/drs/duty/:id/payments
+// @access  Private/AdminOrExecutive
+const getDRSDutyPayments = asyncHandler(async (req, res) => {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.json({ dutyId: null, totalPaid: 0, payments: [] });
+    }
+
+    let duty = await DRSDuty.findById(id).lean();
+    if (!duty) {
+        duty = await DRSDuty.findOne({
+            $or: [{ eventVehicleRef: id }, { outsideVehicleRef: id }]
+        }).lean();
+    }
+
+    const searchIds = [new mongoose.Types.ObjectId(id)];
+    if (duty?._id && String(duty._id) !== String(id)) searchIds.push(duty._id);
+    if (duty?.eventVehicleRef) searchIds.push(duty.eventVehicleRef);
+    if (duty?.outsideVehicleRef) searchIds.push(duty.outsideVehicleRef);
+
+    const [cashTxns, bankTxns] = await Promise.all([
+        CashTransaction.find({ sourceId: { $in: searchIds }, sourceType: 'DRSPayment' }).sort({ date: 1, createdAt: 1 }).lean(),
+        BankTransaction.find({ sourceId: { $in: searchIds }, sourceType: 'DRSPayment' }).sort({ date: 1, createdAt: 1 }).lean()
+    ]);
+
+    const historyRows = Array.isArray(duty?.paymentHistory) ? duty.paymentHistory : [];
+    const txnRows = [
+        ...cashTxns.map(c => ({
+            _id: c._id,
+            date: c.date || c.createdAt,
+            type: 'Payment',
+            amount: Number(c.amount) || 0,
+            paymentMode: 'Cash',
+            bankName: 'Cash',
+            reference: c.reference || '',
+            description: c.description || 'Payment Received via Cash'
+        })),
+        ...bankTxns.map(b => ({
+            _id: b._id,
+            date: b.date || b.createdAt,
+            type: 'Payment',
+            amount: Number(b.amount) || 0,
+            paymentMode: b.paymentMode || b.bankName || 'Bank',
+            bankName: b.bankName || '',
+            reference: b.reference || '',
+            description: b.description || `Payment Received via ${b.bankName || b.paymentMode || 'Bank'}`
+        }))
+    ];
+
+    const payments = [...txnRows];
+    historyRows.forEach(h => {
+        const hAmt = Number(h.amount) || 0;
+        const hTime = new Date(h.date || Date.now()).getTime();
+        const alreadyInTxns = txnRows.some(t =>
+            Math.abs((Number(t.amount) || 0) - hAmt) < 0.01 &&
+            Math.abs(new Date(t.date || 0).getTime() - hTime) < 120000
+        );
+        if (!alreadyInTxns && hAmt > 0) {
+            payments.push({
+                _id: h._id,
+                date: h.date || new Date(),
+                type: 'Payment',
+                amount: hAmt,
+                paymentMode: h.paymentMode || 'Cash',
+                bankName: h.bankName || (String(h.paymentMode || '').toLowerCase().includes('cash') ? 'Cash' : ''),
+                reference: h.reference || '',
+                description: h.notes ? `Payment Received via ${h.paymentMode} (${h.notes})` : `Payment Received via ${h.paymentMode}`
+            });
+        }
+    });
+
+    payments.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+
+    const sumPayments = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const totalPaid = Math.max(Number(duty?.advancePaid) || 0, sumPayments);
+
+    if (duty && sumPayments > (Number(duty.advancePaid) || 0)) {
+        const rev = Number(duty.revenue) || 0;
+        const nextStatus = (rev > 0 && sumPayments >= rev) ? 'Full Received' : 'Advance Received';
+        await DRSDuty.findByIdAndUpdate(duty._id, {
+            $set: { advancePaid: sumPayments, paymentStatus: nextStatus }
+        });
+    }
+
+    res.json({
+        dutyId: duty?._id || null,
+        totalPaid,
+        payments
+    });
+});
+
 module.exports = {
     getDRSDuties,
     createDRSDuty,
     updateDRSDuty,
     deleteDRSDuty,
     getDRSDutiesByVehicle,
-    collectDRSPayment
+    collectDRSPayment,
+    getDRSDutyPayments
 };
