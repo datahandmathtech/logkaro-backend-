@@ -815,3 +815,9 @@
 [2026-11-14T15:06:35.055Z] Password matched
 [2026-11-14T15:06:35.055Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
 [2026-11-14T15:06:47.428Z] DEBUG: getAllVehicles - Query: {"$or":[{"company":"698ac8b01587e01651a49443"},{"company":"698ac8b01587e01651a49443"}],"isOutsideCar":{"$ne":true},"company":"698ac8b01587e01651a49443","status":"active"}
+[2026-11-16T09:25:42.219Z] Login attempt started
+[2026-11-16T09:25:42.221Z] Login request for: Kavishuser1
+[2026-11-16T09:25:42.347Z] User found: Yatree (Role: Admin)
+[2026-11-16T09:25:42.570Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
+[2026-11-16T09:25:42.571Z] Password matched
+[2026-11-16T09:25:42.572Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
