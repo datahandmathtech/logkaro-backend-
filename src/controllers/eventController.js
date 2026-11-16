@@ -211,6 +211,9 @@ const deleteEvent = asyncHandler(async (req, res) => {
         const Attendance = require('../models/Attendance');
         await Attendance.updateMany({ eventId: event._id }, { $unset: { eventId: "" } });
         
+        const DRSDuty = require('../models/DRSDuty');
+        await DRSDuty.deleteMany({ eventId: event._id });
+        
         await event.deleteOne();
         res.json({ message: 'Event and associated records deleted' });
     } else {

@@ -152,7 +152,19 @@ const addCashTransaction = asyncHandler(async (req, res) => {
         throw new Error('Valid amount is required');
     }
 
-    const txDate = date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : new Date();
+    let txDate;
+    if (date) {
+        const now = DateTime.now().setZone('Asia/Kolkata');
+        const parsed = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+        txDate = parsed.set({
+            hour: now.hour,
+            minute: now.minute,
+            second: now.second,
+            millisecond: now.millisecond
+        }).toJSDate();
+    } else {
+        txDate = new Date();
+    }
 
     let resolvedBooking = null;
     let resolvedClientId = clientId || null;
@@ -246,7 +258,19 @@ const depositCashToBank = asyncHandler(async (req, res) => {
         throw new Error('Target Bank account not found');
     }
 
-    const txDate = date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : new Date();
+    let txDate;
+    if (date) {
+        const now = DateTime.now().setZone('Asia/Kolkata');
+        const parsed = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+        txDate = parsed.set({
+            hour: now.hour,
+            minute: now.minute,
+            second: now.second,
+            millisecond: now.millisecond
+        }).toJSDate();
+    } else {
+        txDate = new Date();
+    }
     const refStr = reference || '';
     const descStr = description || `Cash deposited into ${bank.bankName} (${bank.accountNumber ? `A/C ${bank.accountNumber}` : ''})`;
 
@@ -324,7 +348,19 @@ const withdrawCashFromBank = asyncHandler(async (req, res) => {
         throw new Error('Source Bank account not found');
     }
 
-    const txDate = date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : new Date();
+    let txDate;
+    if (date) {
+        const now = DateTime.now().setZone('Asia/Kolkata');
+        const parsed = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+        txDate = parsed.set({
+            hour: now.hour,
+            minute: now.minute,
+            second: now.second,
+            millisecond: now.millisecond
+        }).toJSDate();
+    } else {
+        txDate = new Date();
+    }
     const refStr = reference || '';
     const descStr = description || `Cash withdrawal from ${bank.bankName} (${bank.accountNumber ? `A/C ${bank.accountNumber}` : ''})`;
 

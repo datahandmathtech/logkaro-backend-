@@ -351,7 +351,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
             });
             createdBooking.lead = createdLead._id;
             await createdBooking.save();
-            leadId = createdLead.leadId;
+            leadId = createdLead._id;
         } catch (leadErr) {
             console.error('Error creating linked Lead from Live DRS booking:', leadErr);
         }
@@ -372,7 +372,6 @@ const createDRSDuty = asyncHandler(async (req, res) => {
         try {
             const clientCode = await getNextClientCode(company, dutyDate);
             bookingId = clientCode;
-            leadId = clientCode;
 
             let client = null;
             const cleanM2 = String(mobileNumber || '').replace(/[^0-9]/g, '');
@@ -421,9 +420,27 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                 vehicleType: displayVehicleTypeOpen,
                 notes: notes || guestRemarks || 'Direct Booking from Live DRS'
             });
-            leadId = openLead.leadId;
+            leadId = openLead._id;
         } catch (unconfLeadErr) {
             console.error('Error creating unconfirmed Lead from Live DRS:', unconfLeadErr);
+        }
+    }
+
+    // Ensure leadId is a valid ObjectId (if string clientCode was passed, resolve it)
+    let validLeadObjectId = null;
+    if (leadId) {
+        if (mongoose.isValidObjectId(leadId)) {
+            validLeadObjectId = leadId;
+        } else {
+            try {
+                const matchedLead = await Lead.findOne({
+                    company,
+                    $or: [{ leadId: String(leadId) }, { clientCode: String(leadId) }]
+                }).select('_id');
+                if (matchedLead) validLeadObjectId = matchedLead._id;
+            } catch (err) {
+                console.error('Error resolving leadId to ObjectId:', err);
+            }
         }
     }
 
@@ -477,7 +494,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                 paymentStatus: (advance >= totalRev && totalRev > 0) ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'Pending'),
                 status: status || (vItem.driver || vItem.customDriverName ? 'Assigned' : 'Scheduled'),
                 stayType: req.body.stayType || 'Same Day Return',
-                leadId: leadId || null,
+                leadId: validLeadObjectId || null,
                 bookingId: bookingId || null,
                 bookingRef: bookingRef || null,
                 guestRemarks: guestRemarks || '',
@@ -485,7 +502,7 @@ const createDRSDuty = asyncHandler(async (req, res) => {
                 vendorName: vItem.vendorName || '',
                 ownerName: vItem.vendorName || '',
                 vendorPayout: vPayout,
-                isDirectBooking: !leadId
+                isDirectBooking: !bookingRef
             });
 
             if (isOutside) {

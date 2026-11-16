@@ -512,6 +512,17 @@ const updateBooking = asyncHandler(async (req, res) => {
                 }
             }
         }
+        if (booking.clientName || booking.mobileNumber) {
+            await DRSDuty.updateMany(
+                { $or: matchConditions },
+                {
+                    $set: {
+                        ...(booking.clientName ? { clientName: booking.clientName } : {}),
+                        ...(booking.mobileNumber ? { mobileNumber: booking.mobileNumber } : {})
+                    }
+                }
+            );
+        }
     } catch (drsSyncErr) {
         console.error('Error cascading booking update to DRS:', drsSyncErr);
     }

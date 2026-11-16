@@ -87,6 +87,16 @@ const drsDutySchema = new mongoose.Schema({
         ref: 'Vehicle',
         default: null
     },
+    eventVehicleRef: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Vehicle',
+        default: null
+    },
+    eventId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Event',
+        default: null
+    },
     carIndex: {
         type: Number,
         default: 1

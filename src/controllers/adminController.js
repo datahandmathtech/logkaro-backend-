@@ -248,6 +248,15 @@ const createVehicle = asyncHandler(async (req, res) => {
 
     await vehicle.save();
 
+    if (vehicle.eventId) {
+        try {
+            const { syncEventVehicleToDRS } = require('../utils/eventDrsSync');
+            await syncEventVehicleToDRS(vehicle);
+        } catch (e) {
+            console.error('Error syncing event vehicle to DRS:', e);
+        }
+    }
+
     // Clear dashboard cache on mutation
     DASHBOARD_CACHE.clear();
 
@@ -562,7 +571,7 @@ const getDashboardStats = asyncHandler(async (req, res) => {
             if (!s.vehicle) return;
 
             // Determine the core reminder type based on the frontend logic
-            // (Reminders are only given for Regular Service or Alignment & Balancing)
+            // (Reminders are given for Regular Service, Alignment & Balancing, and Brake Service)
             let reminderType = null;
             const mType = s.maintenanceType || '';
             const mCat = s.category || '';
@@ -571,10 +580,11 @@ const getDashboardStats = asyncHandler(async (req, res) => {
                 reminderType = 'Regular Service';
             } else if (mType.includes('Tyres / Wheels') || mCat.includes('Alignment & Balancing') || mType.includes('Alignment & Balancing')) {
                 reminderType = 'Alignment & Balancing';
+            } else if (mType.includes('Brake') || mCat.includes('Brake')) {
+                reminderType = 'Brake Service';
             }
 
-            // The user explicitly requested that ONLY 'Regular Service' and 'Alignment & Balancing'
-            // should trigger dashboard alerts. Ignore legacy reminders on other types (e.g. 'Other', 'Electrical').
+            // Reminders trigger dashboard alerts for Regular Service, Alignment & Balancing, and Brake Service
             if (!reminderType) return;
 
             const alertKey = `${s.vehicle._id.toString()}_${reminderType}`;
@@ -1347,6 +1357,15 @@ const updateVehicle = asyncHandler(async (req, res) => {
         { new: true, runValidators: false }
     ).populate('currentDriver', 'name mobile');
 
+    if (updatedVehicle && updatedVehicle.eventId) {
+        try {
+            const { syncEventVehicleToDRS } = require('../utils/eventDrsSync');
+            await syncEventVehicleToDRS(updatedVehicle);
+        } catch (syncErr) {
+            console.error('Error cascading event vehicle update to DRS:', syncErr);
+        }
+    }
+
     if (updatedVehicle && updatedVehicle.isOutsideCar) {
         try {
             const { syncFromVehicleUpdate } = require('../utils/outsideCarSync');
@@ -1531,6 +1550,15 @@ const deleteVehicle = asyncHandler(async (req, res) => {
                     vehicle: vehicle._id,
                     date: dateSuffix
                 });
+            }
+        }
+
+        if (vehicle.eventId) {
+            try {
+                const { deleteEventVehicleFromDRS } = require('../utils/eventDrsSync');
+                await deleteEventVehicleFromDRS(vehicle._id);
+            } catch (delErr) {
+                console.error('Error deleting event vehicle from DRS:', delErr);
             }
         }
 
@@ -7215,13 +7243,50 @@ const updateAttendance = asyncHandler(async (req, res) => {
     if (allowanceTA !== undefined) attendance.punchOut.allowanceTA = Number(allowanceTA) || 0;
     if (nightStayAmount !== undefined) attendance.punchOut.nightStayAmount = Number(nightStayAmount) || 0;
     
-    // Ensure outsideTrip exists and its bonusAmount is synced with the new TA/Night amounts
-    if (allowanceTA !== undefined || nightStayAmount !== undefined) {
+    // Ensure outsideTrip exists and its bonusAmount, tripType and occurred are synced with the new TA/Night amounts
+    if (allowanceTA !== undefined || nightStayAmount !== undefined || tripType !== undefined) {
         if (!attendance.outsideTrip) {
             attendance.outsideTrip = { occurred: false, tripType: '', bonusAmount: 0 };
         }
-        attendance.outsideTrip.bonusAmount = (Number(attendance.punchOut.allowanceTA) || 0) + (Number(attendance.punchOut.nightStayAmount) || 0);
+        const curNight = Number(attendance.punchOut.nightStayAmount) || 0;
+        const curTA = Number(attendance.punchOut.allowanceTA) || 0;
+        attendance.outsideTrip.bonusAmount = curTA + curNight;
+
+        if (curNight > 0) {
+            attendance.outsideTrip.tripType = 'Night Hold';
+            attendance.outsideTrip.occurred = true;
+        } else if (curTA > 0) {
+            attendance.outsideTrip.tripType = 'Same Day Return';
+            attendance.outsideTrip.occurred = true;
+        } else if (tripType) {
+            attendance.outsideTrip.tripType = tripType;
+            attendance.outsideTrip.occurred = !tripType.toLowerCase().includes('local');
+        } else {
+            attendance.outsideTrip.tripType = 'City Local';
+            attendance.outsideTrip.occurred = false;
+        }
         attendance.markModified('outsideTrip');
+
+        // Sync pendingExpenses: if night or TA was zeroed out by admin, resolve pending expense
+        if (Array.isArray(attendance.pendingExpenses)) {
+            let pendingModified = false;
+            attendance.pendingExpenses.forEach(exp => {
+                if (exp.status === 'pending') {
+                    if (exp.type === 'allowance_night' && curNight === 0) {
+                        exp.status = 'rejected';
+                        exp.remarks = 'Zeroed out by Admin during log edit';
+                        pendingModified = true;
+                    } else if (exp.type === 'allowance_ta' && curTA === 0) {
+                        exp.status = 'rejected';
+                        exp.remarks = 'Zeroed out by Admin during log edit';
+                        pendingModified = true;
+                    }
+                }
+            });
+            if (pendingModified) {
+                attendance.markModified('pendingExpenses');
+            }
+        }
     }
 
     if (parkingPaidBy !== undefined) attendance.punchOut.parkingPaidBy = parkingPaidBy;
@@ -7281,7 +7346,7 @@ const updateAttendance = asyncHandler(async (req, res) => {
         attendance.markModified('outsideTrip');
     }
 
-    if (tripType !== undefined) {
+    if (tripType !== undefined && allowanceTA === undefined && nightStayAmount === undefined) {
         if (!attendance.outsideTrip) {
             attendance.outsideTrip = { occurred: false, tripType: '', bonusAmount: 0 };
         }
@@ -9284,6 +9349,112 @@ const deleteVendorPayment = asyncHandler(async (req, res) => {
     });
 });
 
+// @desc    Get all confirmed bookings that have pending car/driver assignments
+// @route   GET /api/admin/unassigned-duties/:companyId
+// @access  Private/Admin
+const getUnassignedDuties = asyncHandler(async (req, res) => {
+    try {
+        const { companyId } = req.params;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const Booking = require('../models/Booking');
+        const DRSDuty = require('../models/DRSDuty');
+
+        const confirmedBookings = await Booking.find({
+            company: companyId,
+            bookingStatus: { $in: ['Confirmed', 'Pending'] },
+            $or: [
+                { travelEndDate: { $gte: today } },
+                { travelStartDate: { $gte: today } },
+                { travelEndDate: null }
+            ]
+        })
+        .populate({
+            path: 'drsDuties',
+            populate: [
+                { path: 'vehicle', select: 'carNumber model type' },
+                { path: 'driver', select: 'name mobile' }
+            ]
+        })
+        .sort({ travelStartDate: 1 })
+        .lean();
+
+        const unassignedList = [];
+
+        for (const bkg of confirmedBookings) {
+            const startD = bkg.travelStartDate ? new Date(bkg.travelStartDate) : null;
+            const endD = bkg.travelEndDate ? new Date(bkg.travelEndDate) : startD;
+            const totalDays = (startD && endD)
+                ? Math.max(1, Math.round((endD - startD) / 86400000) + 1)
+                : 1;
+            const numCars = Math.max(1, Number(bkg.numberOfCars) || 1);
+            const totalExpectedDuties = totalDays * numCars;
+
+            const drsArr = Array.isArray(bkg.drsDuties) ? bkg.drsDuties : [];
+            let pendingDutiesCount = 0;
+            let carMissingCount = 0;
+            let driverMissingCount = 0;
+
+            if (drsArr.length > 0) {
+                drsArr.forEach(d => {
+                    const hasCar = Boolean((d.vehicle && (d.vehicle.carNumber || d.vehicle._id)) || (d.customCarNumber && d.customCarNumber.trim() && d.customCarNumber !== 'OUTSIDE-CAR'));
+                    const hasDriver = Boolean((d.driver && (d.driver.name || d.driver._id)) || (d.customDriverName && d.customDriverName.trim()));
+                    const isOutsidePending = Boolean(d.isOutsideCar && (!d.customCarNumber || d.customCarNumber === 'OUTSIDE-CAR'));
+
+                    if (!hasCar || isOutsidePending) carMissingCount++;
+                    if (!hasDriver) driverMissingCount++;
+                    if (!hasCar || !hasDriver || isOutsidePending) {
+                        pendingDutiesCount++;
+                    }
+                });
+                if (totalExpectedDuties > drsArr.length) {
+                    const missing = totalExpectedDuties - drsArr.length;
+                    pendingDutiesCount += missing;
+                    carMissingCount += missing;
+                    driverMissingCount += missing;
+                }
+            } else {
+                pendingDutiesCount = totalExpectedDuties;
+                carMissingCount = totalExpectedDuties;
+                driverMissingCount = totalExpectedDuties;
+            }
+
+            if (pendingDutiesCount > 0) {
+                let statusLabel = '';
+                if (carMissingCount > 0 && driverMissingCount > 0) {
+                    statusLabel = `${carMissingCount} Car + Driver Pending`;
+                } else if (carMissingCount > 0) {
+                    statusLabel = `${carMissingCount} Car Assignment Pending`;
+                } else {
+                    statusLabel = `${driverMissingCount} Driver Assignment Pending`;
+                }
+
+                unassignedList.push({
+                    _id: bkg._id,
+                    bookingId: bkg.bookingId || bkg.bookingCode,
+                    clientName: bkg.clientName || 'Guest',
+                    mobileNumber: bkg.mobileNumber || '',
+                    travelStartDate: bkg.travelStartDate,
+                    travelEndDate: bkg.travelEndDate,
+                    vehicleType: bkg.vehicleType || 'Sedan',
+                    numberOfCars: numCars,
+                    pendingCount: pendingDutiesCount,
+                    carMissingCount: carMissingCount,
+                    driverMissingCount: driverMissingCount,
+                    pendingStatus: statusLabel,
+                    itinerary: bkg.itineraryDescription || (Array.isArray(bkg.itinerary) && bkg.itinerary[0]?.duty) || 'City Tour'
+                });
+            }
+        }
+
+        res.json(unassignedList);
+    } catch (err) {
+        console.error('Error fetching unassigned duties:', err);
+        res.status(500).json({ message: 'Error fetching unassigned duties', error: err.message });
+    }
+});
+
 module.exports = {
     getVendorPayments,
     createVendorPayment,
@@ -9385,6 +9556,7 @@ module.exports = {
     updateLoan,
     deleteLoan,
     recordLoanRepayment,
-    updateCompanySettings
+    updateCompanySettings,
+    getUnassignedDuties
 };
 

@@ -38,6 +38,7 @@ const {
     approveRejectExpense,
     getPendingFuelExpenses,
     getPendingAllowances,
+    getUnassignedDuties,
     addAdvance,
     getAdvances,
     deleteAdvance,
@@ -205,6 +206,7 @@ router.put('/fuel/:id', adminOrExecutive, checkCompany, updateFuelEntry);
 router.delete('/fuel/:id', adminOrExecutive, checkCompany, deleteFuelEntry);
 router.get('/fuel/pending/:companyId', adminOrExecutive, checkCompany, getPendingFuelExpenses);
 router.get('/allowances/pending/:companyId', adminOrExecutive, checkCompany, getPendingAllowances);
+router.get('/unassigned-duties/:companyId', adminOrExecutive, checkCompany, getUnassignedDuties);
 
 router.post('/parking', adminOrExecutive, checkCompany, addParkingEntry);
 router.get('/parking/:companyId', adminOrExecutive, checkCompany, getParkingEntries);
