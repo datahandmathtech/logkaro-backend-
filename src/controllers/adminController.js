@@ -2267,6 +2267,13 @@ const addBorderTax = asyncHandler(async (req, res) => {
     const effectivePaidBy = (paymentSource === 'Guest' || paidBy === 'Guest') ? 'Guest' : (isOtherTax ? 'Others' : (paidBy || 'Company'));
     const cleanDriverId = (driverId && typeof driverId === 'string' && driverId.trim() !== '' && driverId !== 'undefined' && driverId !== 'null' && mongoose.Types.ObjectId.isValid(driverId.trim())) ? driverId.trim() : null;
 
+    let bankDoc = null;
+    if (bankAccountId && mongoose.Types.ObjectId.isValid(bankAccountId)) {
+        bankDoc = await BankAccount.findById(bankAccountId);
+    }
+    const resolvedBankName = bankDoc ? bankDoc.bankName : '';
+    const resolvedPaymentMode = isOtherTax ? 'Others' : (bankAccountId || paymentMode === 'UPI' || paymentMode === 'Bank Transfer') ? (resolvedBankName || paymentMode || 'UPI') : (paymentMode || 'Cash');
+
     const entry = await BorderTax.create({
         company: companyId,
         vehicle: vehicleId,
@@ -2276,7 +2283,12 @@ const addBorderTax = asyncHandler(async (req, res) => {
         date,
         validTill,
         remarks,
-        receiptPhoto: receiptPhoto
+        receiptPhoto: receiptPhoto,
+        paymentMode: resolvedPaymentMode,
+        bankAccount: bankDoc ? bankDoc._id : (bankAccountId || null),
+        bankName: resolvedBankName,
+        paidBy: effectivePaidBy,
+        paymentSource: paymentSource || 'Office'
     });
 
     // 1. By Company Deduction (Cash vs Bank)
@@ -2288,12 +2300,12 @@ const addBorderTax = asyncHandler(async (req, res) => {
             sourceType: 'BorderTax',
             amount: numAmount,
             date: date || entry.date,
-            paymentMode,
-            bankAccountId: bankAccountId || null,
+            paymentMode: resolvedPaymentMode,
+            bankAccountId: (bankDoc ? bankDoc._id : bankAccountId) || null,
             type: 'OUT',
             category: 'Border Tax',
             description: `Border Tax (${borderName}) for Vehicle ${veh?.carNumber || ''}`,
-            reference: borderName,
+            reference: remarks || borderName || resolvedBankName || '',
             receiptPhoto: receiptPhoto || '',
             user: req.user?._id,
             paidBy: effectivePaidBy
@@ -2390,7 +2402,7 @@ const getBorderTaxEntries = asyncHandler(async (req, res) => {
 // @access  Private/Admin
 const rechargeFastag = asyncHandler(async (req, res) => {
     const { 
-        amount, method, remarks, date, companyId,
+        amount, method, paymentMode, remarks, date, companyId,
         paidBy, paymentSource, bankAccountId, bookingId, bookingRef, guestName
     } = req.body;
     logToFile(`[RECHARGE_FASTAG] User: ${req.user?._id}, Role: ${req.user?.role}, Vehicle: ${req.params.id}, Amount: ${amount}`);
@@ -2412,7 +2424,8 @@ const rechargeFastag = asyncHandler(async (req, res) => {
 
     const rechargeAmount = Number(amount);
     const compId = companyId || vehicle.company;
-    const isOtherFastag = method === 'Others' || method === 'Other' || String(method || '').toLowerCase().includes('personal') || paidBy === 'Others' || paymentSource === 'Others';
+    const effectiveMethod = paymentMode || method;
+    const isOtherFastag = effectiveMethod === 'Others' || effectiveMethod === 'Other' || String(effectiveMethod || '').toLowerCase().includes('personal') || paidBy === 'Others' || paymentSource === 'Others';
     const effectivePaidBy = (paymentSource === 'Guest' || paidBy === 'Guest') ? 'Guest' : (isOtherFastag ? 'Others' : (paidBy || 'Company'));
 
     // Update balance and history
@@ -2421,10 +2434,22 @@ const rechargeFastag = asyncHandler(async (req, res) => {
         receiptUrl = req.file.path;
     }
 
+    let bankDoc = null;
+    if (bankAccountId && mongoose.Types.ObjectId.isValid(bankAccountId)) {
+        bankDoc = await BankAccount.findById(bankAccountId);
+    }
+    const resolvedBankName = bankDoc ? bankDoc.bankName : '';
+    const resolvedPaymentMode = isOtherFastag ? 'Others' : (bankAccountId || effectiveMethod === 'UPI' || effectiveMethod === 'Bank Transfer' || /hdfc|icici|axis|sbi|bank/i.test(effectiveMethod || '') || /hdfc|icici|axis|sbi|bank/i.test(remarks || '')) ? (resolvedBankName || effectiveMethod || 'UPI') : (effectiveMethod || 'Cash');
+
     vehicle.fastagBalance = (vehicle.fastagBalance || 0) + rechargeAmount;
     vehicle.fastagHistory.push({
         amount: rechargeAmount,
-        method: method || 'Manual',
+        method: effectiveMethod || (bankAccountId ? 'UPI' : 'Cash'),
+        paymentMode: resolvedPaymentMode,
+        bankAccount: bankDoc ? bankDoc._id : (bankAccountId || null),
+        bankName: resolvedBankName,
+        paidBy: effectivePaidBy,
+        paymentSource: paymentSource || (effectivePaidBy === 'Others' ? 'Others' : 'Office'),
         remarks: remarks || '',
         date: date ? new Date(date) : new Date(),
         receiptPhoto: receiptUrl
@@ -2441,12 +2466,12 @@ const rechargeFastag = asyncHandler(async (req, res) => {
             sourceType: 'Fastag',
             amount: rechargeAmount,
             date: date || new Date(),
-            paymentMode: method,
-            bankAccountId: bankAccountId || null,
+            paymentMode: resolvedPaymentMode,
+            bankAccountId: (bankDoc ? bankDoc._id : bankAccountId) || null,
             type: 'OUT',
             category: 'Fastag Recharge',
             description: `Fastag Recharge for Vehicle ${vehicle.carNumber}`,
-            reference: remarks || '',
+            reference: remarks || resolvedBankName || '',
             receiptPhoto: receiptUrl || '',
             user: req.user?._id,
             paidBy: effectivePaidBy
@@ -2512,7 +2537,7 @@ const rechargeFastag = asyncHandler(async (req, res) => {
 // @route   PUT /api/admin/vehicles/:id/fastag-recharge/:historyId
 // @access  Private/Admin
 const updateFastagRecharge = asyncHandler(async (req, res) => {
-    const { amount, method, remarks, date } = req.body;
+    const { amount, method, remarks, date, bankAccountId, paymentMode, paidBy, paymentSource } = req.body;
     const vehicle = await Vehicle.findById(req.params.id);
 
     if (!vehicle) {
@@ -2534,10 +2559,30 @@ const updateFastagRecharge = asyncHandler(async (req, res) => {
 
     vehicle.fastagBalance = (vehicle.fastagBalance || 0) - oldAmount + newAmount;
 
+    let bankDoc = null;
+    const targetBankId = bankAccountId || (paymentMode && paymentMode !== 'Cash' && paymentMode !== 'Others' ? historyEntry.bankAccount : null);
+    if (targetBankId && mongoose.Types.ObjectId.isValid(targetBankId)) {
+        bankDoc = await BankAccount.findById(targetBankId);
+    }
+
+    const isOther = (method === 'Others' || method === 'Other' || paymentMode === 'Others' || paidBy === 'Others' || paymentSource === 'Others');
+    const resolvedBankName = bankDoc ? bankDoc.bankName : (historyEntry.bankName || '');
+    const resolvedPaymentMode = isOther ? 'Others' : (bankDoc || targetBankId || method === 'UPI' || method === 'Bank Transfer' || paymentMode === 'UPI') ? (resolvedBankName || method || paymentMode || 'UPI') : (paymentMode || method || historyEntry.paymentMode || 'Cash');
+
     // Update entry
     historyEntry.amount = newAmount;
-    historyEntry.method = method || historyEntry.method;
-    historyEntry.remarks = remarks || historyEntry.remarks;
+    historyEntry.method = method || historyEntry.method || (bankDoc ? 'UPI' : 'Cash');
+    historyEntry.paymentMode = resolvedPaymentMode;
+    if (bankDoc) {
+        historyEntry.bankAccount = bankDoc._id;
+        historyEntry.bankName = bankDoc.bankName;
+    } else if (isOther || resolvedPaymentMode === 'Cash') {
+        historyEntry.bankAccount = null;
+        historyEntry.bankName = '';
+    }
+    if (paidBy !== undefined) historyEntry.paidBy = paidBy;
+    if (paymentSource !== undefined) historyEntry.paymentSource = paymentSource;
+    if (remarks !== undefined) historyEntry.remarks = remarks;
     if (date) historyEntry.date = new Date(date);
 
     if (req.file) {
@@ -2552,15 +2597,15 @@ const updateFastagRecharge = asyncHandler(async (req, res) => {
         sourceType: 'Fastag',
         amount: newAmount,
         date: historyEntry.date,
-        paymentMode: historyEntry.method,
-        bankAccountId: req.body.bankAccountId || null,
+        paymentMode: resolvedPaymentMode,
+        bankAccountId: (bankDoc ? bankDoc._id : targetBankId) || null,
         type: 'OUT',
         category: 'Fastag Recharge',
         description: `Fastag Recharge for Vehicle ${vehicle.carNumber}`,
-        reference: historyEntry.remarks || '',
+        reference: historyEntry.remarks || resolvedBankName || '',
         receiptPhoto: historyEntry.receiptPhoto || '',
         user: req.user?._id,
-        paidBy: (req.body.paidBy === 'Guest' || req.body.paymentSource === 'Guest') ? 'Guest' : ((historyEntry.method === 'Others' || historyEntry.method === 'Other' || String(historyEntry.method || '').toLowerCase().includes('personal') || req.body.paidBy === 'Others') ? 'Others' : (req.body.paidBy || 'Company'))
+        paidBy: (paidBy === 'Guest' || paymentSource === 'Guest') ? 'Guest' : (isOther ? 'Others' : (paidBy || historyEntry.paidBy || 'Company'))
     });
 
     res.json({ message: 'Fastag entry updated', newBalance: vehicle.fastagBalance });
@@ -8694,16 +8739,39 @@ const recordLoanRepayment = asyncHandler(async (req, res) => {
 });
 
 const updateBorderTax = asyncHandler(async (req, res) => {
-    const { amount, borderName, date, validTill, remarks, driverId } = req.body;
+    const { amount, borderName, date, validTill, remarks, driverId, paymentMode, bankAccountId, paidBy, paymentSource } = req.body;
     const entry = await BorderTax.findById(req.params.id);
     if (entry) {
         if (amount) entry.amount = Number(amount);
         if (borderName) entry.borderName = borderName;
         if (date) entry.date = date;
         if (validTill !== undefined) entry.validTill = validTill;
-        if (remarks) entry.remarks = remarks;
+        if (remarks !== undefined) entry.remarks = remarks;
         if (driverId) entry.driver = driverId;
         if (req.file) entry.receiptPhoto = req.file.path.replace(/\\/g, '/');
+
+        let bankDoc = null;
+        const targetBankId = bankAccountId || (paymentMode && paymentMode !== 'Cash' && paymentMode !== 'Others' ? entry.bankAccount : null);
+        if (targetBankId && mongoose.Types.ObjectId.isValid(targetBankId)) {
+            bankDoc = await BankAccount.findById(targetBankId);
+        }
+
+        const isOtherTax = paymentMode === 'Others' || paymentMode === 'Other' || String(paymentMode || '').toLowerCase().includes('personal') || paidBy === 'Others' || paymentSource === 'Others';
+        const effectivePaidBy = (paymentSource === 'Guest' || paidBy === 'Guest') ? 'Guest' : (isOtherTax ? 'Others' : (paidBy || entry.paidBy || 'Company'));
+        const resolvedBankName = bankDoc ? bankDoc.bankName : (entry.bankName || '');
+        const resolvedPaymentMode = isOtherTax ? 'Others' : (bankDoc || targetBankId || paymentMode === 'UPI' || paymentMode === 'Bank Transfer') ? (resolvedBankName || paymentMode || 'UPI') : (paymentMode || entry.paymentMode || 'Cash');
+
+        entry.paymentMode = resolvedPaymentMode;
+        if (bankDoc) {
+            entry.bankAccount = bankDoc._id;
+            entry.bankName = bankDoc.bankName;
+        } else if (isOtherTax || resolvedPaymentMode === 'Cash') {
+            entry.bankAccount = null;
+            entry.bankName = '';
+        }
+        if (paidBy !== undefined) entry.paidBy = paidBy;
+        if (paymentSource !== undefined) entry.paymentSource = paymentSource;
+
         const updatedEntry = await entry.save();
 
         const veh = await Vehicle.findById(updatedEntry.vehicle);
@@ -8713,15 +8781,15 @@ const updateBorderTax = asyncHandler(async (req, res) => {
             sourceType: 'BorderTax',
             amount: updatedEntry.amount,
             date: updatedEntry.date,
-            paymentMode: req.body.paymentMode || 'Cash',
-            bankAccountId: req.body.bankAccountId || null,
+            paymentMode: resolvedPaymentMode,
+            bankAccountId: (bankDoc ? bankDoc._id : targetBankId) || null,
             type: 'OUT',
             category: 'Border Tax',
             description: `Border Tax (${updatedEntry.borderName}) for Vehicle ${veh?.carNumber || ''}`,
-            reference: updatedEntry.borderName,
+            reference: updatedEntry.remarks || updatedEntry.borderName || resolvedBankName || '',
             receiptPhoto: updatedEntry.receiptPhoto || '',
             user: req.user?._id,
-            paidBy: (req.body.paidBy === 'Guest' || req.body.paymentSource === 'Guest') ? 'Guest' : ((req.body.paymentMode === 'Others' || req.body.paymentMode === 'Other' || String(req.body.paymentMode || '').toLowerCase().includes('personal') || req.body.paidBy === 'Others') ? 'Others' : (req.body.paidBy || 'Company'))
+            paidBy: effectivePaidBy
         });
 
         res.json(updatedEntry);

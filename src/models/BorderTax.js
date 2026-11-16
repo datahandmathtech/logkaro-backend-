@@ -36,6 +36,22 @@ const borderTaxSchema = new mongoose.Schema({
     },
     remarks: {
         type: String
+    },
+    paymentMode: {
+        type: String
+    },
+    bankAccount: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'BankAccount'
+    },
+    bankName: {
+        type: String
+    },
+    paidBy: {
+        type: String
+    },
+    paymentSource: {
+        type: String
     }
 }, { timestamps: true });
 

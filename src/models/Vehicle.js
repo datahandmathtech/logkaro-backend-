@@ -121,6 +121,11 @@ const vehicleSchema = new mongoose.Schema({
         amount: { type: Number, required: true },
         date: { type: Date, default: Date.now },
         method: { type: String }, // e.g., ICICI Bank, UPI, etc.
+        paymentMode: { type: String },
+        bankAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'BankAccount' },
+        bankName: { type: String },
+        paidBy: { type: String },
+        paymentSource: { type: String },
         remarks: { type: String },
         receiptPhoto: { type: String }
     }],
