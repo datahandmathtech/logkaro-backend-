@@ -821,3 +821,5 @@
 [2026-11-16T09:25:42.570Z] Match debug: receivedPwdLen=11, dbHashStart=$2a$10$SZI, isMatch=true
 [2026-11-16T09:25:42.571Z] Password matched
 [2026-11-16T09:25:42.572Z] DEBUG: Company status in DB is: "active" (Normalized: "active")
+[2026-11-16T12:12:19.526Z] CRON: Cron Jobs Initialized
+[2026-11-16T12:44:51.928Z] CRON: Cron Jobs Initialized

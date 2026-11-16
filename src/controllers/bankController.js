@@ -137,6 +137,23 @@ const getBankTransactions = asyncHandler(async (req, res) => {
         BankAccount.find(bankAccountsQuery).lean()
     ]);
 
+    // Helper to get IST date string YYYY-MM-DD
+    const toISTDateString = (d) => {
+        if (!d) return '';
+        const dt = d instanceof Date ? d : new Date(d);
+        return new Date(dt.getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+    };
+
+    // Sort by IST calendar date descending, and within the same calendar day by createdAt descending (newest on top)
+    transactions.sort((a, b) => {
+        const dateA = toISTDateString(a.date);
+        const dateB = toISTDateString(b.date);
+        if (dateA !== dateB) return dateB.localeCompare(dateA);
+        const ca = new Date(a.createdAt || a.date || 0).getTime();
+        const cb = new Date(b.createdAt || b.date || 0).getTime();
+        return cb - ca;
+    });
+
     // Compute stats
     let totalIn = 0;
     let totalOut = 0;
@@ -176,7 +193,19 @@ const addBankTransaction = asyncHandler(async (req, res) => {
     }
 
     const numAmount = Number(amount);
-    const txDate = date ? new Date(date) : new Date();
+    let txDate;
+    if (date) {
+        const now = DateTime.now().setZone('Asia/Kolkata');
+        const parsed = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+        txDate = parsed.set({
+            hour: now.hour,
+            minute: now.minute,
+            second: now.second,
+            millisecond: now.millisecond
+        }).toJSDate();
+    } else {
+        txDate = new Date();
+    }
 
     let resolvedBooking = null;
     let resolvedClientId = clientId || null;
@@ -264,7 +293,19 @@ const updateBankTransaction = asyncHandler(async (req, res) => {
     const newAmount = amount !== undefined && amount !== '' ? Number(amount) : tx.amount;
     const oldAmount = tx.amount;
     const diff = newAmount - oldAmount;
-    const parsedDate = date ? new Date(date) : tx.date;
+    let parsedDate = tx.date;
+    if (date) {
+        const parsed = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+        const existingDate = tx.date ? DateTime.fromJSDate(new Date(tx.date), { zone: 'Asia/Kolkata' }) : null;
+        const now = DateTime.now().setZone('Asia/Kolkata');
+        const isSameDay = existingDate && existingDate.hasSame(parsed, 'day');
+        const hasTime = existingDate && (existingDate.hour !== 0 || existingDate.minute !== 0 || existingDate.second !== 0);
+        const hour = (isSameDay && hasTime) ? existingDate.hour : now.hour;
+        const minute = (isSameDay && hasTime) ? existingDate.minute : now.minute;
+        const second = (isSameDay && hasTime) ? existingDate.second : now.second;
+        const millisecond = (isSameDay && hasTime) ? existingDate.millisecond : now.millisecond;
+        parsedDate = parsed.set({ hour, minute, second, millisecond }).toJSDate();
+    }
 
     // Update bank balance
     if (diff !== 0) {

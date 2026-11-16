@@ -82,6 +82,23 @@ const getCashTransactions = asyncHandler(async (req, res) => {
         Company.findById(companyId)
     ]);
 
+    // Helper to get IST date string YYYY-MM-DD
+    const toISTDateString = (d) => {
+        if (!d) return '';
+        const dt = d instanceof Date ? d : new Date(d);
+        return new Date(dt.getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+    };
+
+    // Sort by IST calendar date descending, and within the same calendar day by createdAt descending (newest on top)
+    transactions.sort((a, b) => {
+        const dateA = toISTDateString(a.date);
+        const dateB = toISTDateString(b.date);
+        if (dateA !== dateB) return dateB.localeCompare(dateA);
+        const ca = new Date(a.createdAt || a.date || 0).getTime();
+        const cb = new Date(b.createdAt || b.date || 0).getTime();
+        return cb - ca;
+    });
+
     let totalIn = 0;
     let totalOut = 0;
     for (const tx of transactions) {
@@ -431,7 +448,19 @@ const updateCashTransaction = asyncHandler(async (req, res) => {
     const newType = type || oldType;
     const newAmount = amount !== undefined && amount !== '' ? Number(amount) : oldAmount;
     const diff = newAmount - oldAmount;
-    const parsedDate = date !== undefined && date ? DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).toJSDate() : tx.date;
+    let parsedDate = tx.date;
+    if (date !== undefined && date) {
+        const parsed = DateTime.fromISO(date, { zone: 'Asia/Kolkata' });
+        const existingDate = tx.date ? DateTime.fromJSDate(new Date(tx.date), { zone: 'Asia/Kolkata' }) : null;
+        const now = DateTime.now().setZone('Asia/Kolkata');
+        const isSameDay = existingDate && existingDate.hasSame(parsed, 'day');
+        const hasTime = existingDate && (existingDate.hour !== 0 || existingDate.minute !== 0 || existingDate.second !== 0);
+        const hour = (isSameDay && hasTime) ? existingDate.hour : now.hour;
+        const minute = (isSameDay && hasTime) ? existingDate.minute : now.minute;
+        const second = (isSameDay && hasTime) ? existingDate.second : now.second;
+        const millisecond = (isSameDay && hasTime) ? existingDate.millisecond : now.millisecond;
+        parsedDate = parsed.set({ hour, minute, second, millisecond }).toJSDate();
+    }
 
     tx.amount = newAmount;
     tx.type = newType;
