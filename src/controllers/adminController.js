@@ -3396,7 +3396,7 @@ const addMaintenanceRecord = asyncHandler(async (req, res) => {
         category,
         partsChanged: parsedPartsChanged,
         description: description || remarks || '',
-        garageName,
+        garageName: garageName ? String(garageName).trim() : '',
         billNumber,
         billDate,
         amount: numAmount,
@@ -3745,7 +3745,7 @@ const updateMaintenanceRecord = asyncHandler(async (req, res) => {
             } catch (e) {}
         }
         if (description || remarks !== undefined) targetDoc.description = description || remarks || '';
-        if (garageName) targetDoc.garageName = garageName;
+        if (garageName !== undefined) targetDoc.garageName = String(garageName || '').trim();
         if (billNumber) targetDoc.billNumber = billNumber;
         if (billDate) targetDoc.billDate = billDate;
         if (amount) targetDoc.amount = Number(amount);
@@ -9068,21 +9068,77 @@ const settleVendorDues = asyncHandler(async (req, res) => {
     const { companyId, vendorName, billIds, paymentMode, bankAccountId, paidBy, paymentDate, amount } = req.body;
     const finalCompanyId = req.tenantFilter?.company || req.user?.company?._id || req.user?.company || companyId;
 
+    const companyFilter = (finalCompanyId && mongoose.Types.ObjectId.isValid(finalCompanyId))
+        ? { $in: [new mongoose.Types.ObjectId(finalCompanyId), String(finalCompanyId)] }
+        : finalCompanyId;
+
     let query = {
-        company: finalCompanyId
+        company: companyFilter
     };
+
     if (billIds && Array.isArray(billIds) && billIds.length > 0) {
-        query._id = { $in: billIds };
+        const validIds = billIds.filter(id => id && mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (validIds.length > 0) {
+            query._id = { $in: validIds };
+        }
     } else if (vendorName) {
-        query.garageName = new RegExp(`^${vendorName.trim()}$`, 'i');
+        const raw = String(vendorName).trim();
+        const base = raw.replace(/s$/i, '');
+        const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const nameRegex = new RegExp(`^\\s*${escaped}s?\\s*$`, 'i');
+        query.$or = [
+            { garageName: nameRegex },
+            { vendorName: nameRegex }
+        ];
     }
 
-    query.$or = [
-        { paymentStatus: 'Due' },
-        { $expr: { $lt: [{ $ifNull: ['$paidAmount', 0] }, '$amount'] } }
-    ];
+    // Due condition: Must not be already fully paid
+    const dueCondition = {
+        paymentStatus: { $ne: 'Paid' },
+        $or: [
+            { paidAmount: { $exists: false } },
+            { paidAmount: null },
+            { $expr: { $lt: [{ $ifNull: ['$paidAmount', 0] }, '$amount'] } }
+        ]
+    };
 
-    const dueRecords = await Maintenance.find(query).sort({ billDate: 1, createdAt: 1 });
+    if (query.$or) {
+        const vendorOr = query.$or;
+        delete query.$or;
+        query.$and = [
+            { $or: vendorOr },
+            dueCondition
+        ];
+    } else {
+        Object.assign(query, dueCondition);
+    }
+
+    let dueRecords = await Maintenance.find(query).sort({ billDate: 1, createdAt: 1 });
+
+    // Fallback 1: If billIds were provided but dueCondition filtered them out, load them directly
+    if (!dueRecords.length && billIds && Array.isArray(billIds) && billIds.length > 0) {
+        const validIds = billIds.filter(id => id && mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (validIds.length > 0) {
+            dueRecords = await Maintenance.find({
+                company: companyFilter,
+                _id: { $in: validIds }
+            }).sort({ billDate: 1, createdAt: 1 });
+        }
+    }
+
+    // Fallback 2: If query had vendorName, also search with substring case-insensitive regex
+    if (!dueRecords.length && vendorName) {
+        const escaped = String(vendorName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        dueRecords = await Maintenance.find({
+            company: companyFilter,
+            $or: [
+                { garageName: new RegExp(escaped, 'i') },
+                { vendorName: new RegExp(escaped, 'i') }
+            ],
+            paymentStatus: { $ne: 'Paid' }
+        }).sort({ billDate: 1, createdAt: 1 });
+    }
+
     if (!dueRecords.length) {
         return res.status(400).json({ message: 'No due records found for this vendor' });
     }
@@ -9090,7 +9146,7 @@ const settleVendorDues = asyncHandler(async (req, res) => {
     const safePaymentMode = paymentMode || 'Cash';
     const isOtherMode = safePaymentMode === 'Others' || safePaymentMode === 'Other' || String(safePaymentMode).toLowerCase().includes('personal') || paidBy === 'Others';
     const effectivePaidBy = isOtherMode ? 'Others' : (paidBy || 'Company');
-    const effectiveDate = paymentDate || new Date();
+    const effectiveDate = paymentDate ? new Date(paymentDate) : new Date();
     const safeBankAccountId = (bankAccountId && !isOtherMode && safePaymentMode !== 'Cash') ? bankAccountId : null;
 
     let toAllocate = (amount !== undefined && amount !== null && Number(amount) > 0) ? Number(amount) : null;
@@ -9101,9 +9157,10 @@ const settleVendorDues = asyncHandler(async (req, res) => {
 
         const currentPaid = Number(record.paidAmount) || 0;
         const currentDue = Math.max(0, record.amount - currentPaid);
-        if (currentDue <= 0) continue;
+        if (currentDue <= 0 && record.paymentStatus === 'Paid') continue;
 
-        const allocated = (toAllocate !== null) ? Math.min(currentDue, toAllocate) : currentDue;
+        const effectiveDue = currentDue > 0 ? currentDue : record.amount;
+        const allocated = (toAllocate !== null) ? Math.min(effectiveDue, toAllocate) : effectiveDue;
         if (allocated <= 0) continue;
 
         if (toAllocate !== null) {
@@ -9113,7 +9170,9 @@ const settleVendorDues = asyncHandler(async (req, res) => {
         record.paidAmount = currentPaid + allocated;
         record.paymentStatus = (record.paidAmount >= record.amount) ? 'Paid' : 'Due';
         record.paymentMode = safePaymentMode;
-        record.bankAccount = safeBankAccountId;
+        if (safeBankAccountId) {
+            record.bankAccount = safeBankAccountId;
+        }
         await record.save();
 
         if (effectivePaidBy === 'Company') {
@@ -9128,7 +9187,7 @@ const settleVendorDues = asyncHandler(async (req, res) => {
                 bankAccountId: safeBankAccountId,
                 type: 'OUT',
                 category: 'Vehicle Maintenance',
-                description: `Maintenance Settlement (${record.garageName || 'Vendor'})${record.paymentStatus === 'Due' ? ' (Partial Payment)' : ''} for Vehicle ${veh?.carNumber || ''}`,
+                description: `Maintenance Settlement (${record.garageName ? record.garageName.trim() : 'Vendor'})${record.paymentStatus === 'Due' ? ' (Partial Payment)' : ''} for Vehicle ${veh?.carNumber || ''}`,
                 reference: record.billNumber || '',
                 user: req.user?._id,
                 paidBy: 'Company'
