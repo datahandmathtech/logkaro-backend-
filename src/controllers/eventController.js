@@ -197,28 +197,133 @@ const updateEvent = asyncHandler(async (req, res) => {
     }
 });
 
+// @desc    Cleanup orphaned event vehicles and DRS duties (whose event was deleted)
+const cleanupOrphanedEventRecords = async () => {
+    try {
+        const DRSDuty = require('../models/DRSDuty');
+        const validEvents = await Event.find().select('_id name').lean();
+        const validEventIdStrs = new Set(validEvents.map(e => e._id.toString()));
+
+        // 1. Find all vehicles with eventId or event-like carNumber
+        const allEventVehicles = await Vehicle.find({
+            $or: [
+                { eventId: { $exists: true, $ne: null } },
+                { isOutsideCar: true, carNumber: { $regex: '#[0-9]{4}-[0-9]{2}-[0-9]{2}#' } }
+            ]
+        }).select('_id eventId carNumber').lean();
+
+        const orphanedVehIds = [];
+        for (const v of allEventVehicles) {
+            if (!v.eventId || !validEventIdStrs.has(v.eventId.toString())) {
+                orphanedVehIds.push(v._id);
+            }
+        }
+
+        let delVehCount = 0;
+        if (orphanedVehIds.length > 0) {
+            const delVeh = await Vehicle.deleteMany({ _id: { $in: orphanedVehIds } });
+            delVehCount = delVeh.deletedCount;
+        }
+
+        // 2. Find all DRSDuty with eventId that does not exist in validEvents, or linked to orphanedVehIds
+        const allEventDrs = await DRSDuty.find({
+            $or: [
+                { eventId: { $exists: true, $ne: null } },
+                { outsideVehicleRef: { $in: orphanedVehIds } },
+                { eventVehicleRef: { $in: orphanedVehIds } },
+                { itinerary: { $regex: '^\\[Event:' } }
+            ]
+        }).select('_id eventId outsideVehicleRef eventVehicleRef itinerary').lean();
+
+        const orphanedDrsIds = [];
+        for (const d of allEventDrs) {
+            const evStr = d.eventId ? d.eventId.toString() : null;
+            const isOrphaned = !evStr || !validEventIdStrs.has(evStr) ||
+                (d.outsideVehicleRef && orphanedVehIds.some(id => id.toString() === d.outsideVehicleRef.toString())) ||
+                (d.eventVehicleRef && orphanedVehIds.some(id => id.toString() === d.eventVehicleRef.toString()));
+
+            if (isOrphaned) {
+                orphanedDrsIds.push(d._id);
+            }
+        }
+
+        let delDrsCount = 0;
+        if (orphanedDrsIds.length > 0) {
+            const delDrs = await DRSDuty.deleteMany({ _id: { $in: orphanedDrsIds } });
+            delDrsCount = delDrs.deletedCount;
+        }
+
+        if (delVehCount > 0 || delDrsCount > 0) {
+            console.log(`[ORPHAN CLEANUP] Removed ${delVehCount} orphaned event vehicles and ${delDrsCount} orphaned DRS duties.`);
+        }
+        return { deletedVehicles: delVehCount, deletedDRSDuties: delDrsCount };
+    } catch (err) {
+        console.error('[ORPHAN CLEANUP ERROR]', err);
+        return { error: err.message };
+    }
+};
+
+// @desc    Purge orphaned event duties endpoint
+// @route   POST /api/admin/events/cleanup-orphaned
+// @access  Private/Admin
+const purgeOrphanedEventDuties = asyncHandler(async (req, res) => {
+    const result = await cleanupOrphanedEventRecords();
+    res.json({
+        message: 'Orphaned event records cleaned up successfully',
+        ...result
+    });
+});
+
 // @desc    Delete an event
 // @route   DELETE /api/admin/events/:id
 // @access  Private/Admin
 const deleteEvent = asyncHandler(async (req, res) => {
-    const event = await Event.findById(req.params.id);
+    const { id } = req.params;
+    const mongoose = require('mongoose');
+    const validId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null;
+    const idList = [id, validId].filter(Boolean);
+
+    const event = await Event.findById(id);
+
+    // 1. Delete all outside vehicles for this event
+    const vehiclesToDelete = await Vehicle.find({
+        $or: [
+            { eventId: { $in: idList } },
+            ...(event ? [{ remarks: { $regex: event.name, $options: 'i' } }] : [])
+        ]
+    }).select('_id');
+    const vehicleIds = vehiclesToDelete.map(v => v._id);
+
+    await Vehicle.deleteMany({
+        $or: [
+            { eventId: { $in: idList } },
+            { _id: { $in: vehicleIds } }
+        ]
+    });
+
+    // 2. Delete all DRSDuties for this event or linked to these vehicles
+    const DRSDuty = require('../models/DRSDuty');
+    await DRSDuty.deleteMany({
+        $or: [
+            { eventId: { $in: idList } },
+            { outsideVehicleRef: { $in: vehicleIds } },
+            { eventVehicleRef: { $in: vehicleIds } },
+            ...(event ? [{ itinerary: { $regex: `\\[Event: ${event.name}\\]`, $options: 'i' } }] : [])
+        ]
+    });
+
+    // 3. Remove eventId from Fleet Attendance
+    const Attendance = require('../models/Attendance');
+    await Attendance.updateMany({ eventId: { $in: idList } }, { $unset: { eventId: "" } });
 
     if (event) {
-        // Only delete the "OutsideCar" vehicles created for this event
-        await Vehicle.deleteMany({ eventId: event._id, isOutsideCar: true });
-        
-        // Remove eventId from Fleet Attendance instead of deleting attendance
-        const Attendance = require('../models/Attendance');
-        await Attendance.updateMany({ eventId: event._id }, { $unset: { eventId: "" } });
-        
-        const DRSDuty = require('../models/DRSDuty');
-        await DRSDuty.deleteMany({ eventId: event._id });
-        
         await event.deleteOne();
-        res.json({ message: 'Event and associated records deleted' });
-    } else {
-        res.status(404).json({ message: 'Event not found' });
     }
+
+    // Also run orphan cleanup as safety net
+    await cleanupOrphanedEventRecords();
+
+    res.json({ message: 'Event and associated records deleted' });
 });
 
 // @desc    Add a rate card to an event
@@ -281,6 +386,166 @@ const deleteRateCard = asyncHandler(async (req, res) => {
     res.json(event);
 });
 
+// @desc    Bulk import duties for an event from Excel
+// @route   POST /api/admin/events/:eventId/bulk-import-duties
+// @access  Private/Admin
+const bulkImportEventDuties = asyncHandler(async (req, res) => {
+    const { eventId } = req.params;
+    const { duties } = req.body;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+        return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (!Array.isArray(duties) || duties.length === 0) {
+        return res.status(400).json({ message: 'No duties provided for import' });
+    }
+
+    const finalCompanyId = req.tenantFilter?.company || req.companyId || event.company;
+    const DRSDuty = require('../models/DRSDuty');
+    const mongoose = require('mongoose');
+
+    const vehicleDocs = [];
+    const drsDocs = [];
+
+    for (const d of duties) {
+        const vehicleId = new mongoose.Types.ObjectId();
+        const dateStr = d.date ? (d.date.includes('T') ? d.date.split('T')[0] : d.date) : (event.date ? event.date.toISOString().split('T')[0] : new Date().toISOString().split('T')[0]);
+        const randomKey = Math.random().toString(36).substring(2, 7);
+        const basePlate = (d.carNumber && d.carNumber.trim()) ? d.carNumber.trim() : (d.model ? `${d.model.toUpperCase().replace(/[\s/]/g, '')}-EV` : 'EVENT-CAR');
+        const internalCarNumber = `${basePlate}#${dateStr}#${randomKey}`;
+
+        let formattedTime = d.dutyTime || d.time || '09:00 AM';
+        if (formattedTime && /^\d{1,2}:\d{2}$/.test(formattedTime.trim())) {
+            const [hh, mm] = formattedTime.trim().split(':').map(Number);
+            const ampm = hh >= 12 ? 'PM' : 'AM';
+            const displayH = hh % 12 || 12;
+            formattedTime = `${String(displayH).padStart(2, '0')}:${String(mm).padStart(2, '0')} ${ampm}`;
+        }
+
+        const dutyAmount = Number(d.dutyAmount) || Number(d.fare) || 0;
+        const buyAmount = Number(d.buyAmount) || 0;
+        const guestName = (d.guestName && d.guestName.trim()) ? d.guestName.trim() : (event.client?.trim() || event.name || 'Event Guest');
+        const guestCount = Number(d.guestCount) || Number(d.pax) || 1;
+        const pickupPoint = d.property || d.pickupPoint || event.location || '';
+        const dropLocation = d.dropLocation || event.location || '';
+        const remarks = d.remarks || (d.side ? `[${d.side} Side] ${d.flightTrainNo ? 'Details: ' + d.flightTrainNo : ''}` : (d.flightTrainNo || ''));
+        const dutyDate = new Date(`${dateStr}T12:00:00Z`);
+
+        vehicleDocs.push({
+            _id: vehicleId,
+            company: finalCompanyId,
+            eventId: event._id,
+            isOutsideCar: true,
+            transactionType: 'Buy',
+            vehicleSource: d.vehicleSource || 'External',
+            carNumber: internalCarNumber,
+            model: d.model || 'Sedan',
+            permitType: 'Contract',
+            carType: 'Other',
+            dutyType: d.dutyType || 'Airport Pickup',
+            dutyTime: formattedTime,
+            dutyAmount: dutyAmount,
+            buyAmount: buyAmount,
+            guestName: guestName,
+            guestCount: guestCount,
+            property: pickupPoint,
+            dropLocation: dropLocation,
+            driverName: d.driverName || 'NA',
+            ownerName: d.ownerName || '',
+            remarks: remarks,
+            createdAt: dutyDate
+        });
+
+        const dutyDesc = d.dutyType || remarks || `Event: ${event.name}`;
+        drsDocs.push({
+            company: finalCompanyId,
+            clientName: guestName,
+            mobileNumber: d.phone || d.mobileNumber || '',
+            hotel: dropLocation || pickupPoint,
+            date: dutyDate,
+            time: formattedTime,
+            pickupPoint: pickupPoint,
+            duty: dutyDesc,
+            carType: d.model || 'Sedan',
+            customCarNumber: basePlate,
+            customDriverName: d.driverName || '',
+            driver: null,
+            vehicle: null,
+            isOutsideCar: true,
+            outsideVehicleRef: vehicleId,
+            eventVehicleRef: vehicleId,
+            eventId: event._id,
+            vendorName: d.ownerName || '',
+            ownerName: d.ownerName || '',
+            vendorPayout: buyAmount,
+            revenue: dutyAmount,
+            status: 'Scheduled',
+            isDirectBooking: false,
+            itinerary: `[Event: ${event.name}] ${dutyDesc}`
+        });
+    }
+
+    if (vehicleDocs.length > 0) {
+        await Vehicle.insertMany(vehicleDocs, { ordered: false });
+        await DRSDuty.insertMany(drsDocs, { ordered: false });
+    }
+
+    // Recalculate event totalRevenue from all duties
+    const allDuties = await Vehicle.find({ eventId: event._id });
+    const totalRev = allDuties.reduce((sum, v) => sum + (v.dutyAmount || 0), 0);
+    event.totalRevenue = totalRev;
+    await event.save();
+
+    res.status(201).json({
+        message: `Successfully imported ${vehicleDocs.length} event duties and synced with Live DRS.`,
+        count: vehicleDocs.length,
+        duties: vehicleDocs
+    });
+});
+
+// @desc    Bulk delete duties for an event
+// @route   POST /api/admin/events/:eventId/bulk-delete-duties
+// @access  Private/Admin
+const bulkDeleteEventDuties = asyncHandler(async (req, res) => {
+    const { eventId } = req.params;
+    const { dutyIds, deleteAll } = req.body;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+        return res.status(404).json({ message: 'Event not found' });
+    }
+
+    const DRSDuty = require('../models/DRSDuty');
+
+    let deletedCount = 0;
+    if (deleteAll) {
+        const delRes = await Vehicle.deleteMany({ eventId: event._id, isOutsideCar: true });
+        await DRSDuty.deleteMany({ eventId: event._id });
+        deletedCount = delRes.deletedCount;
+    } else if (Array.isArray(dutyIds) && dutyIds.length > 0) {
+        const delRes = await Vehicle.deleteMany({ _id: { $in: dutyIds }, eventId: event._id });
+        await DRSDuty.deleteMany({
+            $or: [
+                { outsideVehicleRef: { $in: dutyIds } },
+                { eventVehicleRef: { $in: dutyIds } }
+            ]
+        });
+        deletedCount = delRes.deletedCount;
+    }
+
+    // Recalculate event totalRevenue
+    const allDuties = await Vehicle.find({ eventId: event._id });
+    event.totalRevenue = allDuties.reduce((sum, v) => sum + (v.dutyAmount || 0), 0);
+    await event.save();
+
+    res.json({
+        message: `Successfully deleted ${deletedCount} event duties.`,
+        deletedCount
+    });
+});
+
 module.exports = {
     createEvent,
     getEvents,
@@ -289,5 +554,9 @@ module.exports = {
     deleteEvent,
     addRateCard,
     updateRateCard,
-    deleteRateCard
+    deleteRateCard,
+    bulkImportEventDuties,
+    bulkDeleteEventDuties,
+    cleanupOrphanedEventRecords,
+    purgeOrphanedEventDuties
 };

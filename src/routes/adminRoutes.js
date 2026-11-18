@@ -109,7 +109,10 @@ const {
     deleteEvent,
     addRateCard,
     updateRateCard,
-    deleteRateCard
+    deleteRateCard,
+    bulkImportEventDuties,
+    bulkDeleteEventDuties,
+    purgeOrphanedEventDuties
 } = require('../controllers/eventController');
 const { protect, admin, adminOrExecutive, checkCompany } = require('../middleware/authMiddleware');
 const { storage } = require('../config/cloudinary');
@@ -282,6 +285,9 @@ router.get('/events/:companyId', adminOrExecutive, checkCompany, getEvents);
 router.get('/events/details/:eventId', adminOrExecutive, checkCompany, getEventDetails);
 router.put('/events/:id', adminOrExecutive, checkCompany, updateEvent);
 router.delete('/events/:id', adminOrExecutive, checkCompany, deleteEvent);
+router.post('/events/:eventId/bulk-import-duties', adminOrExecutive, checkCompany, bulkImportEventDuties);
+router.post('/events/:eventId/bulk-delete-duties', adminOrExecutive, checkCompany, bulkDeleteEventDuties);
+router.post('/events/cleanup-orphaned', adminOrExecutive, checkCompany, purgeOrphanedEventDuties);
 
 // Bank Accounts
 const { getBankAccounts } = require('../controllers/bankController');

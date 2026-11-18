@@ -44,6 +44,13 @@ connectDB().then(async () => {
         console.error('Source cleanup error:', migErr);
     }
 
+    try {
+        const { cleanupOrphanedEventRecords } = require('./controllers/eventController');
+        await cleanupOrphanedEventRecords();
+    } catch (cleanErr) {
+        console.error('Initial orphan cleanup error:', cleanErr);
+    }
+
     console.log('Database connected, seeding completed, and Cron Jobs initialized.');
 }).catch(err => console.error('DB Initial Error:', err.message));
 
