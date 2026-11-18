@@ -204,17 +204,14 @@ const cleanupOrphanedEventRecords = async () => {
         const validEvents = await Event.find().select('_id name').lean();
         const validEventIdStrs = new Set(validEvents.map(e => e._id.toString()));
 
-        // 1. Find all vehicles with eventId or event-like carNumber
+        // 1. Find all vehicles with an eventId whose event no longer exists
         const allEventVehicles = await Vehicle.find({
-            $or: [
-                { eventId: { $exists: true, $ne: null } },
-                { isOutsideCar: true, carNumber: { $regex: '#[0-9]{4}-[0-9]{2}-[0-9]{2}#' } }
-            ]
+            eventId: { $exists: true, $ne: null }
         }).select('_id eventId carNumber').lean();
 
         const orphanedVehIds = [];
         for (const v of allEventVehicles) {
-            if (!v.eventId || !validEventIdStrs.has(v.eventId.toString())) {
+            if (!validEventIdStrs.has(v.eventId.toString())) {
                 orphanedVehIds.push(v._id);
             }
         }
@@ -225,12 +222,15 @@ const cleanupOrphanedEventRecords = async () => {
             delVehCount = delVeh.deletedCount;
         }
 
-        // 2. Find all DRSDuty with eventId that does not exist in validEvents, or linked to orphanedVehIds
+        const validEventVehIds = new Set(
+            (await Vehicle.find({ eventId: { $exists: true, $ne: null } }).select('_id').lean()).map(v => v._id.toString())
+        );
+
+        // 2. Find all event DRSDuties whose event was deleted or whose linked event vehicle no longer exists
         const allEventDrs = await DRSDuty.find({
             $or: [
                 { eventId: { $exists: true, $ne: null } },
-                { outsideVehicleRef: { $in: orphanedVehIds } },
-                { eventVehicleRef: { $in: orphanedVehIds } },
+                { eventVehicleRef: { $exists: true, $ne: null } },
                 { itinerary: { $regex: '^\\[Event:' } }
             ]
         }).select('_id eventId outsideVehicleRef eventVehicleRef itinerary').lean();
@@ -238,9 +238,13 @@ const cleanupOrphanedEventRecords = async () => {
         const orphanedDrsIds = [];
         for (const d of allEventDrs) {
             const evStr = d.eventId ? d.eventId.toString() : null;
+            const outRefStr = d.outsideVehicleRef ? d.outsideVehicleRef.toString() : null;
+            const evRefStr = d.eventVehicleRef ? d.eventVehicleRef.toString() : null;
             const isOrphaned = !evStr || !validEventIdStrs.has(evStr) ||
-                (d.outsideVehicleRef && orphanedVehIds.some(id => id.toString() === d.outsideVehicleRef.toString())) ||
-                (d.eventVehicleRef && orphanedVehIds.some(id => id.toString() === d.eventVehicleRef.toString()));
+                (evRefStr && !validEventVehIds.has(evRefStr)) ||
+                (evStr && outRefStr && !validEventVehIds.has(outRefStr)) ||
+                (outRefStr && orphanedVehIds.some(id => id.toString() === outRefStr)) ||
+                (evRefStr && orphanedVehIds.some(id => id.toString() === evRefStr));
 
             if (isOrphaned) {
                 orphanedDrsIds.push(d._id);
@@ -284,12 +288,13 @@ const deleteEvent = asyncHandler(async (req, res) => {
     const idList = [id, validId].filter(Boolean);
 
     const event = await Event.findById(id);
+    const escName = event ? event.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
 
     // 1. Delete all outside vehicles for this event
     const vehiclesToDelete = await Vehicle.find({
         $or: [
             { eventId: { $in: idList } },
-            ...(event ? [{ remarks: { $regex: event.name, $options: 'i' } }] : [])
+            ...(event ? [{ remarks: { $regex: escName, $options: 'i' } }] : [])
         ]
     }).select('_id');
     const vehicleIds = vehiclesToDelete.map(v => v._id);
@@ -308,7 +313,7 @@ const deleteEvent = asyncHandler(async (req, res) => {
             { eventId: { $in: idList } },
             { outsideVehicleRef: { $in: vehicleIds } },
             { eventVehicleRef: { $in: vehicleIds } },
-            ...(event ? [{ itinerary: { $regex: `\\[Event: ${event.name}\\]`, $options: 'i' } }] : [])
+            ...(event ? [{ itinerary: { $regex: `\\[Event: ${escName}\\]`, $options: 'i' } }] : [])
         ]
     });
 
@@ -518,18 +523,33 @@ const bulkDeleteEventDuties = asyncHandler(async (req, res) => {
     }
 
     const DRSDuty = require('../models/DRSDuty');
+    const escName = event.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     let deletedCount = 0;
     if (deleteAll) {
-        const delRes = await Vehicle.deleteMany({ eventId: event._id, isOutsideCar: true });
-        await DRSDuty.deleteMany({ eventId: event._id });
-        deletedCount = delRes.deletedCount;
-    } else if (Array.isArray(dutyIds) && dutyIds.length > 0) {
-        const delRes = await Vehicle.deleteMany({ _id: { $in: dutyIds }, eventId: event._id });
+        const eventVehs = await Vehicle.find({ eventId: event._id }).select('_id').lean();
+        const vehIds = eventVehs.map(v => v._id);
+        const delRes = await Vehicle.deleteMany({ eventId: event._id });
+        const Attendance = require('../models/Attendance');
+        await Attendance.updateMany({ eventId: event._id }, { $unset: { eventId: '' } });
         await DRSDuty.deleteMany({
             $or: [
-                { outsideVehicleRef: { $in: dutyIds } },
-                { eventVehicleRef: { $in: dutyIds } }
+                { eventId: event._id },
+                ...(vehIds.length > 0 ? [{ outsideVehicleRef: { $in: vehIds } }, { eventVehicleRef: { $in: vehIds } }] : []),
+                { itinerary: { $regex: `^\\[Event: ${escName}\\]`, $options: 'i' } }
+            ]
+        });
+        deletedCount = delRes.deletedCount;
+    } else if (Array.isArray(dutyIds) && dutyIds.length > 0) {
+        const validDutyObjIds = dutyIds
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+        const allDutyIds = [...dutyIds, ...validDutyObjIds];
+        const delRes = await Vehicle.deleteMany({ _id: { $in: allDutyIds }, eventId: event._id });
+        await DRSDuty.deleteMany({
+            $or: [
+                { outsideVehicleRef: { $in: allDutyIds } },
+                { eventVehicleRef: { $in: allDutyIds } }
             ]
         });
         deletedCount = delRes.deletedCount;
@@ -539,6 +559,8 @@ const bulkDeleteEventDuties = asyncHandler(async (req, res) => {
     const allDuties = await Vehicle.find({ eventId: event._id });
     event.totalRevenue = allDuties.reduce((sum, v) => sum + (v.dutyAmount || 0), 0);
     await event.save();
+
+    await cleanupOrphanedEventRecords();
 
     res.json({
         message: `Successfully deleted ${deletedCount} event duties.`,

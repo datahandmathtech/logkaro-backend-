@@ -316,6 +316,19 @@ async function syncFromVehicleUpdate(vehicleDoc) {
 async function syncFromVehicleDelete(vehicleDoc) {
     if (!vehicleDoc || !vehicleDoc.isOutsideCar) return;
 
+    if (vehicleDoc.eventId) {
+        try {
+            await DRSDuty.deleteMany({
+                $or: [
+                    ...(vehicleDoc.drsRef ? [{ _id: vehicleDoc.drsRef }] : []),
+                    { outsideVehicleRef: vehicleDoc._id },
+                    { eventVehicleRef: vehicleDoc._id }
+                ]
+            });
+        } catch (_) {}
+        return;
+    }
+
     if (vehicleDoc.drsRef || vehicleDoc._id) {
         try {
             await DRSDuty.updateMany(

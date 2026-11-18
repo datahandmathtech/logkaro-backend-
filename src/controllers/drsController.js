@@ -1048,6 +1048,35 @@ const deleteDRSDuty = asyncHandler(async (req, res) => {
         }
     }
 
+    // Cascade delete linked event / outside Vehicle records
+    if (duty.eventId || duty.eventVehicleRef) {
+        try {
+            const vehIds = [duty.eventVehicleRef, duty.outsideVehicleRef].filter(Boolean);
+            if (vehIds.length > 0) {
+                await Vehicle.deleteMany({ _id: { $in: vehIds }, isOutsideCar: true });
+            }
+            if (duty.eventId) {
+                const remainingVehicles = await Vehicle.find({ eventId: duty.eventId }).select('dutyAmount').lean();
+                const updatedRevenue = remainingVehicles.reduce((sum, v) => sum + (Number(v.dutyAmount) || 0), 0);
+                await Event.findByIdAndUpdate(duty.eventId, { $set: { totalRevenue: updatedRevenue } });
+            }
+        } catch (evDelErr) {
+            console.error('Error cascading event vehicle deletion from DRS duty:', evDelErr);
+        }
+    } else if (duty.outsideVehicleRef || duty.isOutsideCar) {
+        try {
+            await Vehicle.deleteMany({
+                $or: [
+                    { drsRef: duty._id },
+                    ...(duty.outsideVehicleRef ? [{ _id: duty.outsideVehicleRef, drsRef: duty._id }] : [])
+                ],
+                isOutsideCar: true
+            });
+        } catch (outDelErr) {
+            console.error('Error deleting standalone outside vehicle from DRS duty:', outDelErr);
+        }
+    }
+
     await removeFinancialTransaction({ sourceId: duty._id });
     await duty.deleteOne();
     res.json({ message: 'Duty removed' });

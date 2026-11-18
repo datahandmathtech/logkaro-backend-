@@ -1519,6 +1519,15 @@ const deleteVehicle = asyncHandler(async (req, res) => {
         if (vehicle.currentDriver) {
             await User.findByIdAndUpdate(vehicle.currentDriver, { assignedVehicle: null });
         }
+        if (vehicle.eventId) {
+            try {
+                const { deleteEventVehicleFromDRS } = require('../utils/eventDrsSync');
+                await deleteEventVehicleFromDRS(vehicle._id);
+            } catch (delErr) {
+                console.error('Error deleting event vehicle from DRS:', delErr);
+            }
+        }
+
         // If it's an outside car duty voucher, also clean up associated stray entries
         if (vehicle.isOutsideCar) {
             try {
@@ -1553,16 +1562,16 @@ const deleteVehicle = asyncHandler(async (req, res) => {
             }
         }
 
+        await Vehicle.deleteOne({ _id: vehicle._id });
         if (vehicle.eventId) {
             try {
-                const { deleteEventVehicleFromDRS } = require('../utils/eventDrsSync');
-                await deleteEventVehicleFromDRS(vehicle._id);
-            } catch (delErr) {
-                console.error('Error deleting event vehicle from DRS:', delErr);
+                const remainingEventVehicles = await Vehicle.find({ eventId: vehicle.eventId }).select('dutyAmount').lean();
+                const updatedRevenue = remainingEventVehicles.reduce((sum, v) => sum + (Number(v.dutyAmount) || 0), 0);
+                await Event.findByIdAndUpdate(vehicle.eventId, { $set: { totalRevenue: updatedRevenue } });
+            } catch (revErr) {
+                console.error('Error recalculating event totalRevenue after vehicle delete:', revErr);
             }
         }
-
-        await Vehicle.deleteOne({ _id: vehicle._id });
         // Clear dashboard cache on mutation
         DASHBOARD_CACHE.clear();
         res.json({ message: 'Vehicle removed successfully' });
