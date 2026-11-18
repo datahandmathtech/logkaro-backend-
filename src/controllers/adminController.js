@@ -1079,6 +1079,97 @@ const getAllVehicles = asyncHandler(async (req, res) => {
                 isOutsideCar: { $ne: true }
             }).select('carNumber').lean();
             const fleetNormSet = new Set(fleetVehs.map(fv => normalizePlate(fv.carNumber)).filter(Boolean));
+
+            // Self-heal missing non-event outside vehicles from active Bookings if wiped
+            const nonEventOutCount = vehicles.filter(v => !v.eventId && !fleetNormSet.has(normalizePlate(v.carNumber?.split('#')[0] || ''))).length;
+            if (nonEventOutCount <= 2) {
+                try {
+                    const { syncOutsideCarFromDuty } = require('../utils/outsideCarSync');
+                    const activeBkgs = await Booking.find({
+                        company: req.tenantFilter.company,
+                        bookingStatus: { $ne: 'Cancelled' },
+                        $or: [
+                            { 'itinerary.isOutsideCar': true },
+                            { 'itinerary.buyAmount': { $gt: 0 } },
+                            { 'itinerary.ownerName': { $nin: ['', null, 'undefined'] } },
+                            { 'itinerary.vendorName': { $nin: ['', null, 'undefined'] } }
+                        ]
+                    });
+                    let healedAny = false;
+                    for (const b of activeBkgs) {
+                        const existingDuties = await DRSDuty.find({
+                            company: b.company,
+                            $or: [
+                                { bookingRef: b._id },
+                                ...(b.bookingId ? [{ bookingId: b.bookingId }] : []),
+                                ...(b.clientCode ? [{ bookingId: b.clientCode }] : [])
+                            ]
+                        });
+                        for (let idx = 0; idx < (b.itinerary || []).length; idx++) {
+                            const it = b.itinerary[idx];
+                            const dayNo = it.dayNo || idx + 1;
+                            const rawPlate = ((it.vehicleNumber || it.customCarNumber || '').split('#')[0] || '').trim();
+                            const np = normalizePlate(rawPlate);
+                            if (np && fleetNormSet.has(np)) continue;
+                            const rawOwner = (it.ownerName && it.ownerName !== 'undefined') ? String(it.ownerName).trim() : '';
+                            const rawVendor = (it.vendorName && it.vendorName !== 'undefined') ? String(it.vendorName).trim() : '';
+                            const vendor = rawOwner || rawVendor;
+                            const buyAmt = Number(it.buyAmount) || 0;
+                            if (!((it.isOutsideCar || vendor || buyAmt > 0) && (vendor || buyAmt > 0 || rawPlate))) continue;
+
+                            const itDateObj = it.date ? new Date(it.date) : (b.travelStartDate ? new Date(b.travelStartDate) : new Date());
+                            const itDateStr = itDateObj.toISOString().split('T')[0];
+                            let duty = existingDuties.find(d => {
+                                const dDateStr = d.date ? new Date(d.date).toISOString().split('T')[0] : '';
+                                return (dDateStr && dDateStr === itDateStr) || d.dayNo === dayNo;
+                            });
+                            if (!duty) {
+                                duty = await DRSDuty.create({
+                                    company: b.company,
+                                    bookingRef: b._id,
+                                    bookingId: b.bookingId || b.clientCode,
+                                    leadId: b.lead || null,
+                                    clientName: b.clientName || 'Guest (TBA)',
+                                    mobileNumber: b.mobileNumber || '',
+                                    hotel: it.pickupPoint || b.pickupLocation || b.source || 'Direct',
+                                    pickupPoint: it.pickupPoint || b.pickupLocation || '',
+                                    date: itDateObj,
+                                    time: it.time || '09:00 AM',
+                                    duty: it.duty || it.description || 'Scheduled Duty',
+                                    itinerary: it.duty || it.description || 'Scheduled Duty',
+                                    dayNo,
+                                    carIndex: it.carIndex || 1,
+                                    carType: it.vehicleType || b.vehicleType || 'Sedan',
+                                    customCarNumber: rawPlate,
+                                    customDriverName: it.driverName || '',
+                                    isOutsideCar: true,
+                                    vendorName: vendor,
+                                    ownerName: vendor,
+                                    vendorPayout: buyAmt,
+                                    revenue: Number(it.amount) || 0,
+                                    status: (it.driverName || rawPlate) ? 'Assigned' : 'Scheduled',
+                                    isDirectBooking: false
+                                });
+                                existingDuties.push(duty);
+                            } else {
+                                duty.isOutsideCar = true;
+                                if (vendor) { duty.vendorName = vendor; duty.ownerName = vendor; }
+                                if (buyAmt > 0) duty.vendorPayout = buyAmt;
+                                if (rawPlate) duty.customCarNumber = rawPlate;
+                                await duty.save();
+                            }
+                            const outVeh = await syncOutsideCarFromDuty(duty, b);
+                            if (outVeh) healedAny = true;
+                        }
+                    }
+                    if (healedAny) {
+                        vehicles = await fetchVehiclesAndSync(query);
+                    }
+                } catch (healErr) {
+                    console.error('Auto-heal outside vehicles error:', healErr);
+                }
+            }
+
             vehicles = vehicles.filter(v => {
                 const plate = normalizePlate(v.carNumber?.split('#')[0] || '');
                 return !fleetNormSet.has(plate);
