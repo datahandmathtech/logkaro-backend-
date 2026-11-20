@@ -849,22 +849,6 @@ const cancelBooking = asyncHandler(async (req, res) => {
                 console.error('Error creating bank transaction on refund:', bankErr);
             }
         }
-                        paymentMode: 'Bank Transfer / NEFT',
-                        category: 'Refund',
-                        reference: '',
-                        description: `Refund Issued - ${booking.clientName}`,
-                        bookingRef: booking._id,
-                        clientRef: booking.client || null,
-                        date: new Date(),
-                        createdBy: req.user ? req.user._id : null
-                    });
-                    bank.currentBalance = (bank.currentBalance || 0) - refund;
-                    await bank.save();
-                }
-            } catch (bankErr) {
-                console.error('Error creating bank transaction on refund:', bankErr);
-            }
-        }
         
         booking.advancePaid -= refund; // Retained amount
     }
