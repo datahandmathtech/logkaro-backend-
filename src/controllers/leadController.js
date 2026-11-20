@@ -43,6 +43,51 @@ const getLeads = asyncHandler(async (req, res) => {
             ? { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] }
             : String(companyId);
 
+        // Self-heal: recover leads mistakenly marked as Lost due to the previous 10/35 cancellation glitch
+        Lead.find({
+            company: compFilter,
+            notes: /Booking Cancelled: Customer Request \/ Tour Cancelled/i,
+            clientCode: { $ne: '10/35' },
+            leadId: { $ne: '10/35' },
+            bookingId: { $in: [null, ''] }
+        }).then(async (mistakenLeads) => {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            for (const ml of mistakenLeads) {
+                const sDate = ml.travelStartDate ? new Date(ml.travelStartDate) : null;
+                const eDate = ml.travelEndDate ? new Date(ml.travelEndDate) : (sDate ? new Date(sDate) : null);
+                if (eDate) eDate.setHours(0, 0, 0, 0);
+
+                const cleanedNotes = (ml.notes || '').replace(/Booking Cancelled: Customer Request \/ Tour Cancelled/gi, '').trim();
+
+                if (!eDate || eDate >= now) {
+                    const daysDiff = sDate ? Math.ceil((new Date(sDate) - now) / (1000 * 60 * 60 * 24)) : 999;
+                    let restoredPriority = 'Warm';
+                    if (daysDiff <= 3) restoredPriority = 'Hot';
+                    else if (daysDiff <= 10) restoredPriority = 'Warm';
+                    else restoredPriority = 'Cold';
+                    if (ml.bookingReference === 'Travel Agent') restoredPriority = 'Travel Agent';
+                    else if (ml.numberOfCars > 1) restoredPriority = 'Mixed Vehicle';
+
+                    await Lead.updateOne(
+                        { _id: ml._id },
+                        {
+                            $set: {
+                                status: 'New',
+                                priority: restoredPriority,
+                                notes: cleanedNotes
+                            }
+                        }
+                    );
+                } else {
+                    await Lead.updateOne(
+                        { _id: ml._id },
+                        { $set: { notes: cleanedNotes } }
+                    );
+                }
+            }
+        }).catch(err => console.error('Error recovering mistaken leads:', err));
+
         Promise.all([
             Lead.updateMany(
                 {
@@ -52,8 +97,8 @@ const getLeads = asyncHandler(async (req, res) => {
                     notes: { $not: /Restored from Lost|Reopened to Active/i },
                     $or: [
                         { status: 'Cancelled' },
-                        { travelStartDate: { $lt: today } },
-                        { travelEndDate: { $lte: today } }
+                        { travelEndDate: { $lt: today } },
+                        { travelEndDate: null, travelStartDate: { $lt: today } }
                     ]
                 },
                 {
@@ -214,15 +259,33 @@ const getLeads = asyncHandler(async (req, res) => {
     const restoreRegex = /Restored from Lost|Reopened to Active/i;
     for (let i = 0; i < leads.length; i++) {
         const l = leads[i];
+
+        // Recover any lead mistakenly marked as lost by the 10/35 cancellation glitch
+        if (l.notes && /Booking Cancelled: Customer Request \/ Tour Cancelled/i.test(l.notes) && l.clientCode !== '10/35' && l.leadId !== '10/35' && !l.bookingId) {
+            const startDate = l.travelStartDate ? new Date(l.travelStartDate) : null;
+            const endDate = l.travelEndDate ? new Date(l.travelEndDate) : (startDate ? new Date(startDate) : null);
+            if (endDate) endDate.setHours(0, 0, 0, 0);
+
+            if (!endDate || endDate >= today) {
+                l.status = 'New';
+                const daysDiff = startDate ? Math.ceil((new Date(startDate) - today) / (1000 * 60 * 60 * 24)) : 999;
+                if (daysDiff <= 3) l.priority = 'Hot';
+                else if (daysDiff <= 10) l.priority = 'Warm';
+                else l.priority = 'Cold';
+                if (l.bookingReference === 'Travel Agent') l.priority = 'Travel Agent';
+                else if (l.numberOfCars > 1) l.priority = 'Mixed Vehicle';
+                l.notes = (l.notes || '').replace(/Booking Cancelled: Customer Request \/ Tour Cancelled/gi, '').trim();
+            }
+        }
+
         if (l.status === 'Cancelled' && l.priority !== 'Lost') {
             l.status = 'Lost';
             l.priority = 'Lost';
         } else if (l.status !== 'Confirmed' && l.status !== 'Lost' && !l.bookingId && !restoreRegex.test(l.notes || '')) {
             const startDate = l.travelStartDate ? new Date(l.travelStartDate) : null;
-            const endDate = l.travelEndDate ? new Date(l.travelEndDate) : null;
-            if (startDate) startDate.setHours(0, 0, 0, 0);
+            const endDate = l.travelEndDate ? new Date(l.travelEndDate) : (startDate ? new Date(startDate) : null);
             if (endDate) endDate.setHours(0, 0, 0, 0);
-            const isPassed = (startDate && startDate < today) || (endDate && endDate <= today);
+            const isPassed = endDate && endDate < today;
             if (isPassed) {
                 l.status = 'Lost';
                 l.priority = 'Lost';

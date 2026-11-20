@@ -51,6 +51,44 @@ connectDB().then(async () => {
         console.error('Initial orphan cleanup error:', cleanErr);
     }
 
+    try {
+        const Lead = require('./models/Lead');
+        const mistakenLeads = await Lead.find({
+            notes: /Booking Cancelled: Customer Request \/ Tour Cancelled/i,
+            clientCode: { $ne: '10/35' },
+            leadId: { $ne: '10/35' },
+            bookingId: { $in: [null, ''] }
+        });
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        let restoredCount = 0;
+        for (const ml of mistakenLeads) {
+            const sDate = ml.travelStartDate ? new Date(ml.travelStartDate) : null;
+            const eDate = ml.travelEndDate ? new Date(ml.travelEndDate) : (sDate ? new Date(sDate) : null);
+            if (eDate) eDate.setHours(0, 0, 0, 0);
+            const cleanedNotes = (ml.notes || '').replace(/Booking Cancelled: Customer Request \/ Tour Cancelled/gi, '').trim();
+            if (!eDate || eDate >= now) {
+                const daysDiff = sDate ? Math.ceil((new Date(sDate) - now) / (1000 * 60 * 60 * 24)) : 999;
+                let restoredPriority = 'Warm';
+                if (daysDiff <= 3) restoredPriority = 'Hot';
+                else if (daysDiff <= 10) restoredPriority = 'Warm';
+                else restoredPriority = 'Cold';
+                if (ml.bookingReference === 'Travel Agent') restoredPriority = 'Travel Agent';
+                else if (ml.numberOfCars > 1) restoredPriority = 'Mixed Vehicle';
+
+                await Lead.updateOne({ _id: ml._id }, { $set: { status: 'New', priority: restoredPriority, notes: cleanedNotes } });
+                restoredCount++;
+            } else {
+                await Lead.updateOne({ _id: ml._id }, { $set: { notes: cleanedNotes } });
+            }
+        }
+        if (restoredCount > 0) {
+            console.log(`[Auto-Recover] Restored ${restoredCount} active leads that were mistakenly marked as Lost.`);
+        }
+    } catch (recoverErr) {
+        console.error('Error recovering mistaken leads in server startup:', recoverErr);
+    }
+
     console.log('Database connected, seeding completed, and Cron Jobs initialized.');
 }).catch(err => console.error('DB Initial Error:', err.message));
 

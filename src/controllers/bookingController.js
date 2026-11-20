@@ -880,24 +880,32 @@ const cancelBooking = asyncHandler(async (req, res) => {
     // Sync with linked Lead so Leads table and Conversions stats stay strictly accurate
     try {
         const Lead = require('../models/Lead');
-        await Lead.updateMany(
-            {
-                $or: [
-                    { bookingRef: booking._id },
-                    { bookingId: booking.bookingCode },
-                    { bookingId: booking.bookingId },
-                    { clientCode: booking.bookingCode },
-                    { clientCode: booking.bookingId }
-                ]
-            },
-            {
-                $set: {
-                    status: 'Lost',
-                    priority: 'Lost',
-                    notes: `Booking Cancelled: ${reason || 'Customer request'}`
+        const leadOrConditions = [];
+        if (booking._id) leadOrConditions.push({ bookingRef: booking._id });
+        if (booking.bookingId) {
+            leadOrConditions.push({ bookingId: booking.bookingId });
+            leadOrConditions.push({ clientCode: booking.bookingId });
+        }
+        if (booking.clientCode && booking.clientCode !== booking.bookingId) {
+            leadOrConditions.push({ bookingId: booking.clientCode });
+            leadOrConditions.push({ clientCode: booking.clientCode });
+        }
+
+        if (leadOrConditions.length > 0) {
+            await Lead.updateMany(
+                {
+                    company: booking.company,
+                    $or: leadOrConditions
+                },
+                {
+                    $set: {
+                        status: 'Lost',
+                        priority: 'Lost',
+                        notes: `Booking Cancelled: ${reason || 'Customer request'}`
+                    }
                 }
-            }
-        );
+            );
+        }
     } catch (leadSyncErr) {
         console.error('Error syncing cancelled lead:', leadSyncErr);
     }
