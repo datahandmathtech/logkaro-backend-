@@ -458,7 +458,7 @@ const updateBooking = asyncHandler(async (req, res) => {
                             vehicle: (item.vehicleId && item.vehicleId !== 'custom' && item.vehicleId !== '__custom__') ? item.vehicleId : (item.vehicle || null),
                             customCarNumber: item.vehicleNumber || '',
                             paymentStatus: effectivePaymentStatus,
-                            status: 'Assigned',
+                            status: Boolean(driverId || driverName || vehicleId || (vehicleNumber && vehicleNumber !== 'OUTSIDE-CAR')) ? 'Assigned' : 'Pending',
                             isDirectBooking: false
                         });
                         updatedDutyIds.push(newDuty._id);
@@ -1191,7 +1191,7 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                 matchingDuty.km = day.km || matchingDuty.km || '';
                 matchingDuty.stayType = day.stayType || 'Same Day Return';
                 matchingDuty.paymentStatus = effectivePaymentStatus;
-                matchingDuty.status = 'Assigned';
+                matchingDuty.status = Boolean(driverId || driverName || vehicleId || (vehicleNumber && vehicleNumber !== 'OUTSIDE-CAR')) ? 'Assigned' : 'Pending';
                 matchingDuty.guestFuelFilled = Boolean(booking.guestFuelFilled);
                 matchingDuty.guestFuelAmount = Number(booking.guestFuelAmount) || 0;
                 if (isOutsideDay) {
@@ -1238,7 +1238,7 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     km: day.km || '',
                     stayType: day.stayType || 'Same Day Return',
                     paymentStatus: effectivePaymentStatus,
-                    status: 'Assigned',
+                    status: Boolean(driverId || driverName || vehicleId || (vehicleNumber && vehicleNumber !== 'OUTSIDE-CAR')) ? 'Assigned' : 'Pending',
                     isDirectBooking: false,
                     isOutsideCar: isOutsideDay,
                     vendorName: vendorName,

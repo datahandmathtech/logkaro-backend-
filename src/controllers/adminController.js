@@ -9616,7 +9616,10 @@ const getUnassignedDuties = asyncHandler(async (req, res) => {
                 ? Math.max(1, Math.round((endD - startD) / 86400000) + 1)
                 : 1;
             const numCars = Math.max(1, Number(bkg.numberOfCars) || 1);
-            const totalExpectedDuties = totalDays * numCars;
+            const itinExpectedDuties = (Array.isArray(bkg.itinerary) && bkg.itinerary.length > 0)
+                ? bkg.itinerary.reduce((sum, it) => sum + Math.max(1, Number(it.quantity || it.vehicleCount) || 1), 0)
+                : (totalDays * numCars);
+            const totalExpectedDuties = Math.max(drsArr.length, itinExpectedDuties);
 
             const drsArr = Array.isArray(bkg.drsDuties) ? bkg.drsDuties : [];
             let pendingDutiesCount = 0;
