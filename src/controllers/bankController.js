@@ -90,7 +90,7 @@ const deleteBankAccount = asyncHandler(async (req, res) => {
 // @access  Private
 const getBankTransactions = asyncHandler(async (req, res) => {
     const { companyId } = req.params;
-    const { bankAccountId, date, month, year, search } = req.query;
+    const { bankAccountId, date, month, year, search, startDate, endDate, fromDate, toDate } = req.query;
 
     let query = { company: companyId };
 
@@ -98,17 +98,24 @@ const getBankTransactions = asyncHandler(async (req, res) => {
         query.bankAccount = bankAccountId;
     }
 
-    // Date filter: Daily or Monthly (IST-aware)
-    if (date) {
+    const rangeStart = startDate || fromDate;
+    const rangeEnd = endDate || toDate;
+
+    // Date filter: Range, Daily or Monthly (IST-aware)
+    if (rangeStart && rangeEnd) {
+        const startOfDay = DateTime.fromISO(rangeStart, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
+        const endOfDay = DateTime.fromISO(rangeEnd, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
+        query.date = { $gte: startOfDay, $lte: endOfDay };
+    } else if (date) {
         const startOfDay = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).startOf('day').toJSDate();
         const endOfDay = DateTime.fromISO(date, { zone: 'Asia/Kolkata' }).endOf('day').toJSDate();
         query.date = { $gte: startOfDay, $lte: endOfDay };
     } else if (month && year) {
         const m = parseInt(month);
         const y = parseInt(year);
-        const startDate = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).startOf('month').toJSDate();
-        const endDate = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).endOf('month').toJSDate();
-        query.date = { $gte: startDate, $lte: endDate };
+        const startDateObj = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).startOf('month').toJSDate();
+        const endDateObj = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone: 'Asia/Kolkata' }).endOf('month').toJSDate();
+        query.date = { $gte: startDateObj, $lte: endDateObj };
     }
 
     if (search) {

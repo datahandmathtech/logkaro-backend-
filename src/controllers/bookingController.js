@@ -768,14 +768,13 @@ const recordBookingPayment = asyncHandler(async (req, res) => {
 // @route   POST /api/bookings/:id/cancel
 // @access  Private/AdminOrExecutive
 const cancelBooking = asyncHandler(async (req, res) => {
-    const { reason, refundAmount, refundMode } = req.body;
+    const { reason, refundAmount, refundMode, bankAccountId } = req.body;
 
     const booking = await Booking.findById(req.params.id);
     if (!booking) {
         res.status(404);
         throw new Error('Booking not found');
     }
-    
     
     const advancePaid = booking.advancePaid || 0;
     const refund = Number(refundAmount) || 0;
@@ -818,8 +817,14 @@ const cancelBooking = asyncHandler(async (req, res) => {
             }
         } else {
             try {
-                let bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
-                    || await BankAccount.findOne({ company: booking.company });
+                let bank = null;
+                if (bankAccountId) {
+                    bank = await BankAccount.findById(bankAccountId);
+                }
+                if (!bank) {
+                    bank = await BankAccount.findOne({ company: booking.company, isDefault: true })
+                        || await BankAccount.findOne({ company: booking.company });
+                }
                 
                 if (bank) {
                     await BankTransaction.create({
@@ -828,6 +833,22 @@ const cancelBooking = asyncHandler(async (req, res) => {
                         bankName: bank.bankName || '',
                         type: 'OUT',
                         amount: refund,
+                        paymentMode: 'Bank Transfer / NEFT',
+                        category: 'Refund',
+                        reference: '',
+                        description: `Refund Issued - ${booking.clientName}`,
+                        bookingRef: booking._id,
+                        clientRef: booking.client || null,
+                        date: new Date(),
+                        createdBy: req.user ? req.user._id : null
+                    });
+                    bank.currentBalance = (bank.currentBalance || 0) - refund;
+                    await bank.save();
+                }
+            } catch (bankErr) {
+                console.error('Error creating bank transaction on refund:', bankErr);
+            }
+        }
                         paymentMode: 'Bank Transfer / NEFT',
                         category: 'Refund',
                         reference: '',
