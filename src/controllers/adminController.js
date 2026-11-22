@@ -4230,7 +4230,8 @@ const syncFuelToClientLedger = async (fuelEntry) => {
                 linkedBooking.guestFuelAmount = totalGuestFuel;
                 const pkgAmt = Number(linkedBooking.totalAmount || linkedBooking.packagePrice) || 0;
                 const advPaid = Number(linkedBooking.advancePaid) || 0;
-                linkedBooking.balanceDue = Math.max(0, pkgAmt - advPaid - totalGuestFuel);
+                const otherPayments = (linkedBooking.ledgerEntries || []).filter(e => e.type !== 'Fuel' && e.type !== 'Advance').reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+                linkedBooking.balanceDue = Math.max(0, pkgAmt - advPaid - totalGuestFuel - otherPayments);
                 await linkedBooking.save();
                 console.log(`[syncFuelToClientLedger] Updated linked booking ${linkedBooking.bookingId}: guestFuelAmount=${totalGuestFuel}, balanceDue=${linkedBooking.balanceDue}`);
             }
@@ -4295,7 +4296,8 @@ const removeFuelFromClientLedger = async (fuelEntry) => {
                         bkg.guestFuelAmount = totalGuestFuel;
                         const pkgAmt = Number(bkg.totalAmount || bkg.packagePrice) || 0;
                         const advPaid = Number(bkg.advancePaid) || 0;
-                        bkg.balanceDue = Math.max(0, pkgAmt - advPaid - totalGuestFuel);
+                        const otherPayments = (bkg.ledgerEntries || []).filter(e => e.type !== 'Fuel' && e.type !== 'Advance').reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+                        bkg.balanceDue = Math.max(0, pkgAmt - advPaid - totalGuestFuel - otherPayments);
                         await bkg.save();
                     }
                 } catch (bkgRevErr) {

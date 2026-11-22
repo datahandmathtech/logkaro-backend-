@@ -82,7 +82,7 @@ const getBookings = asyncHandler(async (req, res) => {
     }
 
     const bookings = await Booking.find(query)
-        .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks')
+        .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks vehicleMatrix vehicleMatrices clientName mobileNumber')
         .populate('client', 'name mobile balance')
         .populate({
             path: 'drsDuties',
@@ -1278,7 +1278,7 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
     }
 
     const updatedBooking = await Booking.findById(booking._id)
-        .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks')
+        .populate('lead', 'leadId status totalAmount remarksHistory specialRemarks vehicleMatrix vehicleMatrices clientName mobileNumber')
         .populate('client', 'name mobile balance')
         .populate({
             path: 'drsDuties',

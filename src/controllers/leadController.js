@@ -940,7 +940,15 @@ const convertToBooking = asyncHandler(async (req, res) => {
             return 'Confirmed';
         })(),
         paymentStatus: advance >= grandTotal ? 'Full Received' : (advance > 0 ? 'Advance Received' : 'No Advance'),
-        vehicleMatrix: lead.vehicleMatrix || {},
+        vehicleMatrix: (() => {
+            const hasData = (m) => m && (Number(m.totalKmRun) > 0 || Number(m.fuelCost) > 0 || Number(m.driverSalary) > 0);
+            if (hasData(lead.vehicleMatrix)) return lead.vehicleMatrix;
+            if (Array.isArray(lead.vehicleMatrices)) {
+                const found = lead.vehicleMatrices.find(m => hasData(m));
+                if (found) return found;
+            }
+            return lead.vehicleMatrix || {};
+        })(),
         termsAndConditions: termsAndConditions || [
             'All rates are strictly subject to vehicle availability at the time of confirmation.',
             'Toll, Tax, Parking, State Border Tax will be charged on actuals unless explicitly mentioned.',
