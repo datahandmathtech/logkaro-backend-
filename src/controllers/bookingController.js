@@ -776,20 +776,26 @@ const cancelBooking = asyncHandler(async (req, res) => {
         throw new Error('Booking not found');
     }
     
-    const advancePaid = booking.advancePaid || 0;
+    const advancePaid = Number(booking.advancePaid) || 0;
     const refund = Number(refundAmount) || 0;
     
     // Process refund logic
     if (refund > 0) {
-        await LedgerEntry.create({
-            client: booking.client,
-            company: booking.company,
-            type: 'Refund',
-            amount: refund,
-            description: `Refund for cancelled booking ${booking.bookingCode || booking.bookingId} via ${refundMode || 'Bank'}`,
-            referenceId: booking._id,
-            date: new Date()
-        });
+        if (booking.client) {
+            try {
+                await LedgerEntry.create({
+                    client: booking.client,
+                    company: booking.company,
+                    type: 'Refund',
+                    amount: refund,
+                    description: `Refund for cancelled booking ${booking.bookingCode || booking.bookingId} via ${refundMode || 'Bank'}`,
+                    referenceId: booking._id,
+                    date: new Date()
+                });
+            } catch (ledgerErr) {
+                console.error('Error creating refund ledger entry:', ledgerErr);
+            }
+        }
 
         const isCashRefund = (refundMode && refundMode.toLowerCase().includes('cash')) || refundMode === 'Cash';
 
@@ -850,21 +856,26 @@ const cancelBooking = asyncHandler(async (req, res) => {
             }
         }
         
-        booking.advancePaid -= refund; // Retained amount
+        booking.advancePaid = Math.max(0, advancePaid - refund); // Retained amount
     }
 
 
-    const retainedAmount = advancePaid - refund;
+    const retainedAmount = Math.max(0, advancePaid - refund);
     
     booking.bookingStatus = 'Cancelled';
+    booking.balanceDue = 0;
+    booking.paymentStatus = 'Settled';
     if (retainedAmount > 0) {
         booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled (Retained ₹${retainedAmount}): ${reason || 'Customer request'}`;
     } else {
         booking.notes = `${booking.notes ? booking.notes + ' | ' : ''}Cancelled (Fully Refunded): ${reason || 'Customer request'}`;
         
         // Remove ledger entries as per request: "no account ledger will show there"
-        const LedgerEntry = require('../models/LedgerEntry');
-        await LedgerEntry.deleteMany({ referenceId: booking._id });
+        try {
+            await LedgerEntry.deleteMany({ referenceId: booking._id });
+        } catch (delErr) {
+            console.error('Error deleting ledger entries on full refund:', delErr);
+        }
         booking.advancePaid = 0;
     }
 

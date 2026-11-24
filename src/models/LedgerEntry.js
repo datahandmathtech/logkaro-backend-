@@ -18,7 +18,7 @@ const ledgerEntrySchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['Bill', 'Payment', 'Fuel', 'Advance'],
+        enum: ['Bill', 'Payment', 'Fuel', 'Advance', 'Refund'],
         required: true
     },
     amount: {
