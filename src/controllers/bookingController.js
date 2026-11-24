@@ -876,6 +876,15 @@ const cancelBooking = asyncHandler(async (req, res) => {
         } catch (delErr) {
             console.error('Error deleting ledger entries on full refund:', delErr);
         }
+
+        // Clean up Bank and Cash transactions for fully refunded booking so Bank Book does not retain cancelled clutter
+        try {
+            await BankTransaction.deleteMany({ bookingRef: booking._id });
+            await CashTransaction.deleteMany({ bookingRef: booking._id });
+        } catch (txCleanErr) {
+            console.error('Error cleaning up bank/cash transactions on full refund:', txCleanErr);
+        }
+
         booking.advancePaid = 0;
     }
 
