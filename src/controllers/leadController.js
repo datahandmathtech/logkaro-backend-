@@ -887,8 +887,15 @@ const convertToBooking = asyncHandler(async (req, res) => {
     const agentName = lead.travelAgentName || (client && client.clientType === 'Travel Agent' ? (client.agencyName || client.name) : '');
     const agentMob = lead.travelAgentMobile || (client && client.clientType === 'Travel Agent' ? client.mobile : '');
 
-    // 5. Create the Booking document
-    const booking = await Booking.create({
+    // 5. Create or revive existing Booking document
+    let booking = await Booking.findOne({
+        $or: [
+            { bookingId, company: lead.company },
+            { lead: lead._id, company: lead.company }
+        ]
+    });
+
+    const bkgData = {
         bookingId,
         clientCode: lead.clientCode || lead.leadId,
         company: lead.company,
@@ -902,7 +909,7 @@ const convertToBooking = asyncHandler(async (req, res) => {
         travelAgentMobile: agentMob,
         bankAccount: bank ? bank._id : null,
         bankName: bank ? bank.bankName : '',
-        paymentMode: paymentMode || '',
+        paymentMode: paymentMode || 'UPI / QR Code',
         paymentReference: paymentReference || '',
         paymentScreenshot: paymentScreenshot || '',
         clientName: lead.clientName,
@@ -920,9 +927,8 @@ const convertToBooking = asyncHandler(async (req, res) => {
         numberOfCars: lead.numberOfCars,
         itinerary: lead.itinerary || [],
         totalAmount: grandTotal,
-        advancePaid: advance, advanceDate: advancePaymentDate || new Date(),
-        paymentMode: paymentMode || 'UPI / QR Code',
-        paymentReference: paymentReference || '',
+        advancePaid: advance,
+        advanceDate: advancePaymentDate || new Date(),
         balanceDue: balanceDue,
         gstMode: lead.gstMode,
         gstRate,
@@ -955,9 +961,19 @@ const convertToBooking = asyncHandler(async (req, res) => {
             'Air conditioner will not work in stationary/parked vehicle or uphill driving.',
             'Night driving charge applies between 10:00 PM and 06:00 AM.'
         ],
-        notes: notes || adminOverrideReason || '',
-        drsDuties: []
-    });
+        notes: notes || adminOverrideReason || ''
+    };
+
+    if (booking) {
+        Object.assign(booking, bkgData);
+        booking.drsDuties = booking.drsDuties || [];
+        await booking.save();
+    } else {
+        booking = await Booking.create({
+            ...bkgData,
+            drsDuties: []
+        });
+    }
 
     // Link bookingRef to BankTransaction / CashTransaction if created
     if (advance > 0) {
