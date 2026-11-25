@@ -1,30 +1,61 @@
 const asyncHandler = require('express-async-handler');
 const Event = require('../models/Event');
 const Vehicle = require('../models/Vehicle');
+const BankAccount = require('../models/BankAccount');
+const BankTransaction = require('../models/BankTransaction');
+const CashTransaction = require('../models/CashTransaction');
+const Company = require('../models/Company');
 const mongoose = require('mongoose');
 
 // @desc    Create a new event
 // @route   POST /api/admin/events
 // @access  Private/Admin
 const createEvent = asyncHandler(async (req, res) => {
-    const { name, companyId, client, date, location, description, totalRevenue, advanceAmount, amountReceived, status, proformaAmount } = req.body;
+    const {
+        name, companyId, client, clientPhone, clientEmail, source, eventType,
+        date, startDate, endDate, location, pickupLocation, dropLocation, itinerary, reportingTime,
+        description, totalRevenue, advanceAmount, amountReceived, status, proformaAmount,
+        vehicleRequirements, customVehicles
+    } = req.body;
 
-    if (!name || !companyId || !date) {
+    if (!name || !companyId || (!date && !startDate)) {
         return res.status(400).json({ message: 'Please provide name, companyId and date' });
+    }
+
+    const eventDate = date ? new Date(date) : new Date(startDate);
+    const evStartDate = startDate ? new Date(startDate) : eventDate;
+    const evEndDate = endDate ? new Date(endDate) : evStartDate;
+
+    // Calculate total proforma amount from vehicleRequirements if not provided
+    let calcProforma = Number(proformaAmount) || 0;
+    if (!calcProforma && Array.isArray(vehicleRequirements) && vehicleRequirements.length > 0) {
+        calcProforma = vehicleRequirements.reduce((sum, vr) => sum + (Number(vr.amount) || ((Number(vr.quantity) || 1) * (Number(vr.rate) || 0))), 0);
     }
 
     const event = new Event({
         name,
         company: companyId,
-        client,
-        date: new Date(date),
-        location,
-        description,
+        client: client || '',
+        clientPhone: clientPhone || '',
+        clientEmail: clientEmail || '',
+        source: source || 'Direct',
+        eventType: eventType || 'Wedding',
+        date: eventDate,
+        startDate: evStartDate,
+        endDate: evEndDate,
+        location: location || '',
+        pickupLocation: pickupLocation || '',
+        dropLocation: dropLocation || '',
+        itinerary: itinerary || '',
+        reportingTime: reportingTime || '',
+        description: description || '',
         totalRevenue: Number(totalRevenue) || 0,
         amountReceived: Number(amountReceived) || 0,
         advanceAmount: Number(advanceAmount) || 0,
-        proformaAmount: Number(proformaAmount) || 0,
-        status: status || 'Upcoming'
+        proformaAmount: calcProforma,
+        status: status || 'Upcoming',
+        vehicleRequirements: Array.isArray(vehicleRequirements) ? vehicleRequirements : [],
+        customVehicles: customVehicles || {}
     });
 
     await event.save();
@@ -45,17 +76,20 @@ const getEvents = asyncHandler(async (req, res) => {
     const companyObjectId = new mongoose.Types.ObjectId(finalCompanyId);
 
     let matchQuery = { company: companyObjectId };
+    if (status && status !== 'All') {
+        matchQuery.status = status;
+    }
     if (from && to) {
         const toDate = new Date(to);
         toDate.setHours(23, 59, 59, 999);
-        matchQuery.date = {
-            $gte: new Date(from),
-            $lte: toDate
-        };
-    }
-    
-    if (status && status !== 'All') {
-        matchQuery.status = status;
+        const fromDate = new Date(from);
+        matchQuery.$or = [
+            { date: { $gte: fromDate, $lte: toDate } },
+            { startDate: { $gte: fromDate, $lte: toDate } },
+            { endDate: { $gte: fromDate, $lte: toDate } },
+            { startDate: { $lte: toDate }, endDate: { $gte: fromDate } },
+            { status: { $in: ['Lead', 'Upcoming', 'Running'] } }
+        ];
     }
 
     // Advanced aggregation to count fleet (Attendance + Manual Fleet) vs external (Market) cars
@@ -173,11 +207,22 @@ const updateEvent = asyncHandler(async (req, res) => {
 
     if (event) {
         event.name = req.body.name || event.name;
-        event.client = req.body.client || event.client;
-        event.date = req.body.date ? new Date(req.body.date) : event.date;
-        event.location = req.body.location || event.location;
-        event.description = req.body.description || event.description;
-        event.status = req.body.status || event.status;
+        event.client = req.body.client !== undefined ? req.body.client : event.client;
+        event.clientPhone = req.body.clientPhone !== undefined ? req.body.clientPhone : event.clientPhone;
+        event.clientEmail = req.body.clientEmail !== undefined ? req.body.clientEmail : event.clientEmail;
+        event.source = req.body.source !== undefined ? req.body.source : event.source;
+        event.eventType = req.body.eventType !== undefined ? req.body.eventType : event.eventType;
+        if (req.body.date) event.date = new Date(req.body.date);
+        if (req.body.startDate) event.startDate = new Date(req.body.startDate);
+        if (req.body.endDate) event.endDate = new Date(req.body.endDate);
+        if (req.body.location !== undefined) event.location = req.body.location;
+        if (req.body.pickupLocation !== undefined) event.pickupLocation = req.body.pickupLocation;
+        if (req.body.dropLocation !== undefined) event.dropLocation = req.body.dropLocation;
+        if (req.body.itinerary !== undefined) event.itinerary = req.body.itinerary;
+        if (req.body.reportingTime !== undefined) event.reportingTime = req.body.reportingTime;
+        if (req.body.description !== undefined) event.description = req.body.description;
+        if (req.body.status !== undefined) event.status = req.body.status;
+        if (req.body.vehicleRequirements !== undefined) event.vehicleRequirements = req.body.vehicleRequirements;
         
         // New financial fields
         if (req.body.totalRevenue !== undefined) event.totalRevenue = Number(req.body.totalRevenue);
@@ -195,6 +240,188 @@ const updateEvent = asyncHandler(async (req, res) => {
     } else {
         res.status(404).json({ message: 'Event not found' });
     }
+});
+
+// @desc    Confirm an event lead with advance payment & bank/cash ledger recording
+// @route   POST /api/admin/events/:id/confirm
+// @access  Private/Admin
+const confirmEvent = asyncHandler(async (req, res) => {
+    const event = await Event.findById(req.params.id);
+    if (!event) {
+        return res.status(404).json({ message: 'Event not found' });
+    }
+
+    const { advanceAmount, paymentMode, bankAccountId, paymentReference, paymentDate, remarks } = req.body;
+    const advance = Number(advanceAmount) || 0;
+    const isCash = (paymentMode && paymentMode.toLowerCase().includes('cash')) || paymentMode === 'Cash';
+    const effectivePaymentDate = paymentDate ? new Date(paymentDate) : new Date();
+
+    // Determine upcoming vs running based on event dates
+    const evDate = event.startDate || event.date;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const evD = new Date(evDate);
+    evD.setHours(0, 0, 0, 0);
+    const endD = event.endDate ? new Date(event.endDate) : new Date(evD);
+    endD.setHours(23, 59, 59, 999);
+
+    let newStatus = 'Upcoming';
+    if (evD <= today && endD >= today) {
+        newStatus = 'Running';
+    } else if (endD < today) {
+        newStatus = 'Closed';
+    }
+
+    event.status = newStatus;
+    if (advance > 0) {
+        event.advanceAmount = (event.advanceAmount || 0) + advance;
+        event.amountReceived = (event.amountReceived || 0) + advance;
+        event.advanceDate = effectivePaymentDate;
+        event.paymentMode = isCash ? 'Cash' : 'Bank';
+
+        if (isCash) {
+            try {
+                const cashTx = await CashTransaction.create({
+                    company: event.company,
+                    type: 'IN',
+                    amount: advance,
+                    category: 'Booking Advance',
+                    reference: paymentReference || '',
+                    description: `Event Advance Received - ${event.name} (${event.client || ''})`,
+                    guestName: event.client || '',
+                    sourceId: event._id,
+                    sourceType: 'EventAdvance',
+                    date: effectivePaymentDate,
+                    createdBy: req.user ? req.user._id : null
+                });
+                event.cashTransactionRef = cashTx._id;
+                await Company.findByIdAndUpdate(event.company, {
+                    $inc: { cashBalance: advance }
+                });
+            } catch (cashErr) {
+                console.error('Error creating cash transaction for event advance:', cashErr);
+            }
+        } else {
+            try {
+                let bank = null;
+                if (bankAccountId) {
+                    bank = await BankAccount.findById(bankAccountId);
+                }
+                if (!bank) {
+                    bank = await BankAccount.findOne({ company: event.company, isDefault: true })
+                        || await BankAccount.findOne({ company: event.company });
+                }
+
+                if (bank) {
+                    const bankTx = await BankTransaction.create({
+                        company: event.company,
+                        bankAccount: bank._id,
+                        bankName: bank.bankName,
+                        type: 'IN',
+                        amount: advance,
+                        category: 'Booking Advance',
+                        paymentMode: paymentMode || 'Bank Transfer / NEFT',
+                        reference: paymentReference || '',
+                        description: `Event Advance Received - ${event.name} (${event.client || ''})`,
+                        sourceId: event._id,
+                        sourceType: 'EventAdvance',
+                        date: effectivePaymentDate,
+                        createdBy: req.user ? req.user._id : null
+                    });
+                    event.bankAccount = bank._id;
+                    event.bankTransactionRef = bankTx._id;
+                    bank.currentBalance = (bank.currentBalance || 0) + advance;
+                    await bank.save();
+                }
+            } catch (bankErr) {
+                console.error('Error creating bank transaction for event advance:', bankErr);
+            }
+        }
+    }
+
+    await event.save();
+    res.json({ message: 'Event confirmed successfully', event });
+});
+
+// @desc    Cancel event / move to lost with optional refund
+// @route   POST /api/admin/events/:id/cancel
+// @access  Private/Admin
+const cancelEvent = asyncHandler(async (req, res) => {
+    const event = await Event.findById(req.params.id);
+    if (!event) {
+        return res.status(404).json({ message: 'Event not found' });
+    }
+
+    const { reason, refundAmount, refundMode, bankAccountId, paymentReference } = req.body;
+    const refund = Number(refundAmount) || 0;
+    const isCashRefund = (refundMode && refundMode.toLowerCase().includes('cash')) || refundMode === 'Cash';
+
+    event.status = 'Lost';
+    event.lostReason = reason || 'Cancelled by Client';
+    event.refundAmount = refund;
+    event.refundMode = isCashRefund ? 'Cash' : 'Bank';
+
+    if (refund > 0) {
+        if (isCashRefund) {
+            try {
+                await CashTransaction.create({
+                    company: event.company,
+                    type: 'OUT',
+                    amount: refund,
+                    category: 'Refund',
+                    reference: paymentReference || '',
+                    description: `Event Refund - ${event.name} (${event.client || ''})`,
+                    guestName: event.client || '',
+                    sourceId: event._id,
+                    sourceType: 'EventRefund',
+                    date: new Date(),
+                    createdBy: req.user ? req.user._id : null
+                });
+                await Company.findByIdAndUpdate(event.company, {
+                    $inc: { cashBalance: -refund }
+                });
+            } catch (cashRefundErr) {
+                console.error('Error recording cash refund for event:', cashRefundErr);
+            }
+        } else {
+            try {
+                let bank = null;
+                if (bankAccountId) {
+                    bank = await BankAccount.findById(bankAccountId);
+                }
+                if (!bank) {
+                    bank = await BankAccount.findOne({ company: event.company, isDefault: true })
+                        || await BankAccount.findOne({ company: event.company });
+                }
+
+                if (bank) {
+                    await BankTransaction.create({
+                        company: event.company,
+                        bankAccount: bank._id,
+                        bankName: bank.bankName || '',
+                        type: 'OUT',
+                        amount: refund,
+                        paymentMode: 'Bank Transfer / NEFT',
+                        category: 'Refund',
+                        reference: paymentReference || '',
+                        description: `Event Refund - ${event.name} (${event.client || ''})`,
+                        sourceId: event._id,
+                        sourceType: 'EventRefund',
+                        date: new Date(),
+                        createdBy: req.user ? req.user._id : null
+                    });
+                    bank.currentBalance = (bank.currentBalance || 0) - refund;
+                    await bank.save();
+                }
+            } catch (bankRefundErr) {
+                console.error('Error recording bank refund for event:', bankRefundErr);
+            }
+        }
+        event.advanceAmount = Math.max(0, (event.advanceAmount || 0) - refund);
+    }
+
+    await event.save();
+    res.json({ message: 'Event marked as Lost / Cancelled', event });
 });
 
 // @desc    Cleanup orphaned event vehicles and DRS duties (whose event was deleted)
@@ -574,6 +801,8 @@ module.exports = {
     getEventDetails,
     updateEvent,
     deleteEvent,
+    confirmEvent,
+    cancelEvent,
     addRateCard,
     updateRateCard,
     deleteRateCard,
