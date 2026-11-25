@@ -9,6 +9,47 @@ const vehicleRequirementSchema = new mongoose.Schema({
     remarks: { type: String, default: '' }
 }, { _id: true });
 
+const excelDutySchema = new mongoose.Schema({
+    dutyId: { type: String, default: '' }, // e.g. LK-001
+    guestGroup: { type: String, default: '' }, // e.g. Mr. Rahul + 9
+    pax: { type: Number, default: 1 },
+    carType: { type: String, default: 'Sedan' },
+    serviceType: { type: String, default: 'ARRIVAL' }, // ARRIVAL, DEPARTURE, DISPOSAL, INTERCITY, LOCAL
+    pickupDate: { type: String, default: '' },
+    guestPickup: { type: String, default: '' },
+    flightDate: { type: String, default: '' },
+    flightTime: { type: String, default: '' },
+    flightNumber: { type: String, default: '' },
+    pickupPoint: { type: String, default: '' },
+    dropLocation: { type: String, default: '' },
+    vehicleNumber: { type: String, default: '' },
+    driverName: { type: String, default: '' },
+    driverPhone: { type: String, default: '' },
+    vehicleSource: { type: String, enum: ['Own', 'Vendor'], default: 'Own' },
+    vendorName: { type: String, default: '' },
+    vendorCost: { type: Number, default: 0 },
+    dutyAmount: { type: Number, default: 0 },
+    status: { type: String, default: 'Scheduled' }, // Scheduled, Dispatched, Running, Completed, Cancelled
+    rawSourceSheet: { type: String, default: '' },
+    rawSourceRow: { type: Number, default: 0 },
+    sourceRef: { type: String, default: '' },
+    disposalHours: { type: Number, default: 8 },
+    disposalKm: { type: Number, default: 80 },
+    intercityRoute: { type: String, default: '' },
+    remarks: { type: String, default: '' }
+}, { _id: true });
+
+const reconciliationAlertSchema = new mongoose.Schema({
+    id: { type: String, default: '' },
+    type: { type: String, default: 'duplicate' }, // duplicate, pickup_confirm, conflict
+    title: { type: String, default: '' },
+    description: { type: String, default: '' },
+    suggestedAction: { type: String, default: '' },
+    status: { type: String, default: 'pending' }, // pending, resolved, ignored
+    dutyId: { type: String, default: '' },
+    sourceInfo: { type: String, default: '' }
+}, { _id: true });
+
 const eventSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -77,6 +118,20 @@ const eventSchema = new mongoose.Schema({
     },
     // Multi-vehicle requirements grid (Sedan x 5, Innova x 3, etc.)
     vehicleRequirements: [vehicleRequirementSchema],
+
+    // Live Event Excel Spreadsheet Centre
+    excelDuties: [excelDutySchema],
+    reconciliationAlerts: [reconciliationAlertSchema],
+    excelConfig: {
+        departureLeadMinutes: { type: Number, default: 120 },
+        defaultTurnaroundMinutes: { type: Number, default: 30 },
+        disposalHours: { type: Number, default: 8 },
+        disposalKm: { type: Number, default: 80 },
+        intercityRouteNotes: { type: String, default: '' },
+        timezone: { type: String, default: 'Asia/Kolkata' }
+    },
+    rawWorkbookRowsCount: { type: Number, default: 0 },
+    uniqueGuestGroupsCount: { type: Number, default: 0 },
 
     // Tariff / Rate Cards defined for this specific event
     rateCard: [{

@@ -109,6 +109,8 @@ const {
     deleteEvent,
     confirmEvent,
     cancelEvent,
+    getExcelDuties,
+    saveExcelDuties,
     addRateCard,
     updateRateCard,
     deleteRateCard,
@@ -289,6 +291,8 @@ router.put('/events/:id', adminOrExecutive, checkCompany, updateEvent);
 router.delete('/events/:id', adminOrExecutive, checkCompany, deleteEvent);
 router.post('/events/:id/confirm', adminOrExecutive, checkCompany, confirmEvent);
 router.post('/events/:id/cancel', adminOrExecutive, checkCompany, cancelEvent);
+router.get('/events/:id/excel-duties', adminOrExecutive, checkCompany, getExcelDuties);
+router.post('/events/:id/excel-duties', adminOrExecutive, checkCompany, saveExcelDuties);
 router.post('/events/:eventId/bulk-import-duties', adminOrExecutive, checkCompany, bulkImportEventDuties);
 router.post('/events/:eventId/bulk-delete-duties', adminOrExecutive, checkCompany, bulkDeleteEventDuties);
 router.post('/events/cleanup-orphaned', adminOrExecutive, checkCompany, purgeOrphanedEventDuties);

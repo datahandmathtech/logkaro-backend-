@@ -580,6 +580,11 @@ const updateLead = asyncHandler(async (req, res) => {
             };
             const linkedBkg = await Booking.findOne(bkgMatch);
             if (linkedBkg) {
+                if (req.body.status === 'Confirmed' || updatedLead.status === 'Confirmed') {
+                    if (linkedBkg.bookingStatus === 'Cancelled') {
+                        linkedBkg.bookingStatus = 'Confirmed';
+                    }
+                }
                 if (req.body.totalAmount !== undefined && Number(req.body.totalAmount) > 0) {
                     linkedBkg.totalAmount = Number(req.body.totalAmount);
                     const fuelDed = linkedBkg.guestFuelFilled ? (Number(linkedBkg.guestFuelAmount) || 0) : 0;

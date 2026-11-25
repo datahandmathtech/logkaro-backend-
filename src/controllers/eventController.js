@@ -795,6 +795,121 @@ const bulkDeleteEventDuties = asyncHandler(async (req, res) => {
     });
 });
 
+// @desc    Get Excel Duties & reconciliation state for an event
+// @route   GET /api/admin/events/:id/excel-duties
+// @access  Private/Admin
+const getExcelDuties = asyncHandler(async (req, res) => {
+    const event = await Event.findById(req.params.id);
+    if (!event) return res.status(404).json({ message: 'Event not found' });
+
+    const DRSDuty = require('../models/DRSDuty');
+    const drsDutiesCount = await DRSDuty.countDocuments({ eventId: event._id });
+    const vendorDutiesCount = (event.excelDuties || []).filter(d => d.vehicleSource === 'Vendor').length;
+
+    // Distinct assigned vehicles
+    const distinctVehicles = new Set((event.excelDuties || []).map(d => (d.vehicleNumber || '').trim()).filter(Boolean));
+
+    res.json({
+        event: {
+            _id: event._id,
+            name: event.name,
+            client: event.client,
+            date: event.date,
+            startDate: event.startDate,
+            endDate: event.endDate,
+            location: event.location,
+            status: event.status
+        },
+        excelDuties: event.excelDuties || [],
+        reconciliationAlerts: event.reconciliationAlerts || [],
+        excelConfig: event.excelConfig || {
+            departureLeadMinutes: 120,
+            defaultTurnaroundMinutes: 30,
+            disposalHours: 8,
+            disposalKm: 80,
+            intercityRouteNotes: '',
+            timezone: 'Asia/Kolkata'
+        },
+        counts: {
+            rawRows: event.rawWorkbookRowsCount || (event.excelDuties || []).length,
+            uniqueGuestGroups: event.uniqueGuestGroupsCount || (event.excelDuties || []).length,
+            vehicleDuties: (event.excelDuties || []).length,
+            distinctVehicles: distinctVehicles.size,
+            drsDuties: drsDutiesCount,
+            vendorDuties: vendorDutiesCount
+        }
+    });
+});
+
+// @desc    Save/Sync Excel Duties to database and Live DRS
+// @route   POST /api/admin/events/:id/excel-duties
+// @access  Private/Admin
+const saveExcelDuties = asyncHandler(async (req, res) => {
+    const event = await Event.findById(req.params.id);
+    if (!event) return res.status(404).json({ message: 'Event not found' });
+
+    const { excelDuties, excelConfig, reconciliationAlerts, rawRowsCount, uniqueGroupsCount } = req.body;
+
+    if (Array.isArray(excelDuties)) {
+        event.excelDuties = excelDuties;
+    }
+    if (excelConfig) {
+        event.excelConfig = { ...event.excelConfig, ...excelConfig };
+    }
+    if (Array.isArray(reconciliationAlerts)) {
+        event.reconciliationAlerts = reconciliationAlerts;
+    }
+    if (rawRowsCount !== undefined) event.rawWorkbookRowsCount = Number(rawRowsCount);
+    if (uniqueGroupsCount !== undefined) event.uniqueGuestGroupsCount = Number(uniqueGroupsCount);
+
+    // Sync to Live DRS (DRSDuty)
+    const DRSDuty = require('../models/DRSDuty');
+    const finalCompanyId = req.tenantFilter?.company || req.companyId || event.company;
+
+    if (Array.isArray(excelDuties) && excelDuties.length > 0) {
+        for (const duty of excelDuties) {
+            const dutyDateStr = duty.pickupDate || (event.startDate ? event.startDate.toISOString().split('T')[0] : event.date.toISOString().split('T')[0]);
+            const dutyDate = new Date(`${dutyDateStr}T12:00:00Z`);
+            const dutyDesc = `[Event: ${event.name}] ${duty.serviceType || 'Duty'}: ${duty.pickupPoint || 'Pickup'} ➔ ${duty.dropLocation || 'Drop'}`;
+
+            await DRSDuty.findOneAndUpdate(
+                { eventId: event._id, customCarNumber: duty.dutyId || duty.vehicleNumber, date: dutyDate },
+                {
+                    $set: {
+                        company: finalCompanyId,
+                        clientName: duty.guestGroup || event.client || 'Guest',
+                        hotel: duty.dropLocation || duty.pickupPoint || event.location || '',
+                        date: dutyDate,
+                        time: duty.guestPickup || '09:00 AM',
+                        pickupPoint: duty.pickupPoint || event.location || '',
+                        duty: dutyDesc,
+                        carType: duty.carType || 'Sedan',
+                        customCarNumber: duty.vehicleNumber || duty.dutyId || 'EVENT-CAR',
+                        customDriverName: duty.driverName || '',
+                        eventId: event._id,
+                        status: duty.status || 'Scheduled',
+                        isOutsideCar: duty.vehicleSource === 'Vendor',
+                        vendorName: duty.vendorName || '',
+                        revenue: Number(duty.dutyAmount) || 0,
+                        vendorPayout: Number(duty.vendorCost) || 0,
+                        itinerary: dutyDesc
+                    }
+                },
+                { upsert: true, new: true }
+            );
+        }
+    }
+
+    await event.save();
+
+    res.json({
+        message: 'Live Event Excel saved and synced successfully to DRS & Vendor Book!',
+        excelDuties: event.excelDuties,
+        excelConfig: event.excelConfig,
+        reconciliationAlerts: event.reconciliationAlerts
+    });
+});
+
 module.exports = {
     createEvent,
     getEvents,
@@ -803,6 +918,8 @@ module.exports = {
     deleteEvent,
     confirmEvent,
     cancelEvent,
+    getExcelDuties,
+    saveExcelDuties,
     addRateCard,
     updateRateCard,
     deleteRateCard,

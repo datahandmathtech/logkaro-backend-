@@ -879,8 +879,15 @@ const cancelBooking = asyncHandler(async (req, res) => {
 
         // Clean up Bank and Cash transactions for fully refunded booking so Bank Book does not retain cancelled clutter
         try {
-            await BankTransaction.deleteMany({ bookingRef: booking._id });
-            await CashTransaction.deleteMany({ bookingRef: booking._id });
+            const txConditions = [{ bookingRef: booking._id }];
+            if (booking.lead) {
+                txConditions.push({ leadRef: booking.lead });
+                txConditions.push({ sourceId: booking.lead });
+            }
+            if (booking.bookingId) txConditions.push({ bookingId: booking.bookingId });
+            if (booking.clientCode) txConditions.push({ bookingId: booking.clientCode });
+            await BankTransaction.deleteMany({ $or: txConditions });
+            await CashTransaction.deleteMany({ $or: txConditions });
         } catch (txCleanErr) {
             console.error('Error cleaning up bank/cash transactions on full refund:', txCleanErr);
         }
@@ -935,6 +942,11 @@ const cancelBooking = asyncHandler(async (req, res) => {
         console.error('Error syncing cancelled lead:', leadSyncErr);
     }
     
+    // Ensure all required fields exist before saving so validation error never occurs
+    booking.travelStartDate = booking.travelStartDate || new Date();
+    booking.travelEndDate = booking.travelEndDate || booking.travelStartDate || new Date();
+    booking.vehicleType = booking.vehicleType || 'Sedan';
+
     // Save booking
     await booking.save();
 
