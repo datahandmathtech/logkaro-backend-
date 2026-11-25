@@ -118,10 +118,30 @@ const {
     bulkDeleteEventDuties,
     purgeOrphanedEventDuties
 } = require('../controllers/eventController');
+const {
+    createImportBatch,
+    mapImportBatch,
+    getImportReconcile,
+    saveImportDecisions,
+    commitImportBatch,
+    getEventDutiesSheet,
+    createEventDuty,
+    patchEventDuty,
+    getDutyHistory,
+    assignDutyVehicle,
+    mergeDuties,
+    splitDuty,
+    cancelDuty,
+    createReturnLegDuty,
+    updateEventExcelConfig,
+    retryOutboxSync,
+    exportEventDutiesWorkbook
+} = require('../controllers/eventExcelController');
 const { protect, admin, adminOrExecutive, checkCompany } = require('../middleware/authMiddleware');
 const { storage } = require('../config/cloudinary');
 const multer = require('multer');
 const upload = multer({ storage });
+const excelMemoryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 router.use(protect);
 
@@ -293,6 +313,24 @@ router.post('/events/:id/confirm', adminOrExecutive, checkCompany, confirmEvent)
 router.post('/events/:id/cancel', adminOrExecutive, checkCompany, cancelEvent);
 router.get('/events/:id/excel-duties', adminOrExecutive, checkCompany, getExcelDuties);
 router.post('/events/:id/excel-duties', adminOrExecutive, checkCompany, saveExcelDuties);
+// Live Event Excel & Reconciliation Centre (Specification v1.1)
+router.post('/events/:id/imports', adminOrExecutive, excelMemoryUpload.single('file'), checkCompany, createImportBatch);
+router.post('/events/:id/imports/:batchId/map', adminOrExecutive, checkCompany, mapImportBatch);
+router.get('/events/:id/imports/:batchId/reconcile', adminOrExecutive, checkCompany, getImportReconcile);
+router.post('/events/:id/imports/:batchId/decisions', adminOrExecutive, checkCompany, saveImportDecisions);
+router.post('/events/:id/imports/:batchId/commit', adminOrExecutive, checkCompany, commitImportBatch);
+router.get('/events/:id/duties/export', adminOrExecutive, checkCompany, exportEventDutiesWorkbook);
+router.get('/events/:id/duties', adminOrExecutive, checkCompany, getEventDutiesSheet);
+router.post('/events/:id/duties/merge', adminOrExecutive, checkCompany, mergeDuties);
+router.post('/events/:id/duties', adminOrExecutive, checkCompany, createEventDuty);
+router.patch('/events/:id/duties/:dutyId', adminOrExecutive, checkCompany, patchEventDuty);
+router.get('/events/:id/duties/:dutyId/history', adminOrExecutive, checkCompany, getDutyHistory);
+router.post('/events/:id/duties/:dutyId/assign', adminOrExecutive, checkCompany, assignDutyVehicle);
+router.post('/events/:id/duties/:dutyId/split', adminOrExecutive, checkCompany, splitDuty);
+router.post('/events/:id/duties/:dutyId/cancel', adminOrExecutive, checkCompany, cancelDuty);
+router.post('/events/:id/duties/:dutyId/return-leg', adminOrExecutive, checkCompany, createReturnLegDuty);
+router.patch('/events/:id/excel-config', adminOrExecutive, checkCompany, updateEventExcelConfig);
+router.post('/events/:id/outbox/retry', adminOrExecutive, checkCompany, retryOutboxSync);
 router.post('/events/:eventId/bulk-import-duties', adminOrExecutive, checkCompany, bulkImportEventDuties);
 router.post('/events/:eventId/bulk-delete-duties', adminOrExecutive, checkCompany, bulkDeleteEventDuties);
 router.post('/events/cleanup-orphaned', adminOrExecutive, checkCompany, purgeOrphanedEventDuties);

@@ -124,12 +124,19 @@ const eventSchema = new mongoose.Schema({
     reconciliationAlerts: [reconciliationAlertSchema],
     excelConfig: {
         departureLeadMinutes: { type: Number, default: 120 },
+        stationLeadMinutes: { type: Number, default: 60 },
         defaultTurnaroundMinutes: { type: Number, default: 30 },
         disposalHours: { type: Number, default: 8 },
         disposalKm: { type: Number, default: 80 },
         intercityRouteNotes: { type: String, default: '' },
         timezone: { type: String, default: 'Asia/Kolkata' }
     },
+    mappingTemplates: [{
+        name: { type: String, required: true },
+        headerRowIndex: { type: Number, default: 0 },
+        columnMap: { type: mongoose.Schema.Types.Mixed, default: {} },
+        createdAt: { type: Date, default: Date.now }
+    }],
     rawWorkbookRowsCount: { type: Number, default: 0 },
     uniqueGuestGroupsCount: { type: Number, default: 0 },
 
