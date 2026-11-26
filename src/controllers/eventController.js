@@ -7,6 +7,73 @@ const CashTransaction = require('../models/CashTransaction');
 const Company = require('../models/Company');
 const mongoose = require('mongoose');
 
+const normalizeRateMatrixPayload = ({ selectedCars, serviceRequirements, rateMatrix, rateCard, existingRateCard = [] }) => {
+    const cleanCars = Array.isArray(selectedCars)
+        ? selectedCars
+            .map(c => (typeof c === 'string' ? { name: c.trim(), subtitle: '' } : { name: String(c?.name || '').trim(), subtitle: String(c?.subtitle || '').trim() }))
+            .filter(c => c.name)
+        : undefined;
+
+    const cleanServices = Array.isArray(serviceRequirements)
+        ? [...new Set(serviceRequirements.map(s => String(s || '').trim()).filter(Boolean))]
+        : undefined;
+
+    const cleanMatrix = Array.isArray(rateMatrix)
+        ? rateMatrix
+            .map(row => {
+                const serviceName = String(row?.serviceName || '').trim();
+                if (!serviceName) return null;
+                const cleanRates = {};
+                const rawRates = row?.rates && typeof row.rates === 'object' ? row.rates : {};
+                Object.entries(rawRates).forEach(([carKey, val]) => {
+                    if (val === '' || val === null || val === undefined) return;
+                    const num = Number(val);
+                    if (Number.isFinite(num) && num >= 0) {
+                        cleanRates[String(carKey).trim()] = num;
+                    }
+                });
+                return { serviceName, rates: cleanRates };
+            })
+            .filter(Boolean)
+        : undefined;
+
+    let finalRateCard = Array.isArray(rateCard) ? rateCard : undefined;
+    if (cleanMatrix !== undefined) {
+        const carsList = cleanCars || [];
+        const derived = [];
+        const existingLookup = new Map(
+            (existingRateCard || []).map(r => [`${String(r.serviceName || '').trim().toLowerCase()}__${String(r.vehicleType || '').trim().toLowerCase()}`, r])
+        );
+
+        cleanMatrix.forEach(row => {
+            const entries = carsList.length > 0
+                ? carsList.map(c => [c.name, row.rates[c.name], c])
+                : Object.entries(row.rates).map(([k, v]) => [k, v, { name: k, subtitle: '' }]);
+
+            entries.forEach(([carName, val, carObj]) => {
+                if (val === '' || val === null || val === undefined) return;
+                const num = Number(val);
+                if (!Number.isFinite(num) || num < 0) return;
+                const prev = existingLookup.get(`${row.serviceName.toLowerCase()}__${carName.toLowerCase()}`);
+                derived.push({
+                    serviceName: row.serviceName,
+                    vehicleType: carName,
+                    vehicleModel: carObj?.subtitle ? `${carName} (${carObj.subtitle})` : carName,
+                    baseRate: num,
+                    baseKms: prev?.baseKms || 0,
+                    baseHours: prev?.baseHours || 0,
+                    extraKmRate: prev?.extraKmRate || 0,
+                    extraHourRate: prev?.extraHourRate || 0,
+                    driverAllowance: prev?.driverAllowance || 0
+                });
+            });
+        });
+        finalRateCard = derived;
+    }
+
+    return { cleanCars, cleanServices, cleanMatrix, finalRateCard };
+};
+
 // @desc    Create a new event
 // @route   POST /api/admin/events
 // @access  Private/Admin
@@ -15,7 +82,7 @@ const createEvent = asyncHandler(async (req, res) => {
         name, companyId, client, clientPhone, clientEmail, source, eventType,
         date, startDate, endDate, location, pickupLocation, dropLocation, itinerary, reportingTime,
         description, totalRevenue, advanceAmount, amountReceived, status, proformaAmount,
-        vehicleRequirements, customVehicles
+        vehicleRequirements, customVehicles, selectedCars, serviceRequirements, rateMatrix, rateCard
     } = req.body;
 
     if (!name || !companyId || (!date && !startDate)) {
@@ -31,6 +98,10 @@ const createEvent = asyncHandler(async (req, res) => {
     if (!calcProforma && Array.isArray(vehicleRequirements) && vehicleRequirements.length > 0) {
         calcProforma = vehicleRequirements.reduce((sum, vr) => sum + (Number(vr.amount) || ((Number(vr.quantity) || 1) * (Number(vr.rate) || 0))), 0);
     }
+
+    const { cleanCars, cleanServices, cleanMatrix, finalRateCard } = normalizeRateMatrixPayload({
+        selectedCars, serviceRequirements, rateMatrix, rateCard
+    });
 
     const event = new Event({
         name,
@@ -55,6 +126,10 @@ const createEvent = asyncHandler(async (req, res) => {
         proformaAmount: calcProforma,
         status: status || 'Upcoming',
         vehicleRequirements: Array.isArray(vehicleRequirements) ? vehicleRequirements : [],
+        selectedCars: cleanCars || [],
+        serviceRequirements: cleanServices || [],
+        rateMatrix: cleanMatrix || [],
+        rateCard: finalRateCard || [],
         customVehicles: customVehicles || {}
     });
 
@@ -223,6 +298,28 @@ const updateEvent = asyncHandler(async (req, res) => {
         if (req.body.description !== undefined) event.description = req.body.description;
         if (req.body.status !== undefined) event.status = req.body.status;
         if (req.body.vehicleRequirements !== undefined) event.vehicleRequirements = req.body.vehicleRequirements;
+
+        if (
+            req.body.selectedCars !== undefined ||
+            req.body.serviceRequirements !== undefined ||
+            req.body.rateMatrix !== undefined ||
+            req.body.rateCard !== undefined
+        ) {
+            const { cleanCars, cleanServices, cleanMatrix, finalRateCard } = normalizeRateMatrixPayload({
+                selectedCars: req.body.selectedCars !== undefined ? req.body.selectedCars : event.selectedCars,
+                serviceRequirements: req.body.serviceRequirements !== undefined ? req.body.serviceRequirements : event.serviceRequirements,
+                rateMatrix: req.body.rateMatrix,
+                rateCard: req.body.rateCard,
+                existingRateCard: event.rateCard
+            });
+            if (cleanCars !== undefined) event.selectedCars = cleanCars;
+            if (cleanServices !== undefined) event.serviceRequirements = cleanServices;
+            if (cleanMatrix !== undefined) {
+                event.rateMatrix = cleanMatrix;
+                event.markModified('rateMatrix');
+            }
+            if (finalRateCard !== undefined) event.rateCard = finalRateCard;
+        }
         
         // New financial fields
         if (req.body.totalRevenue !== undefined) event.totalRevenue = Number(req.body.totalRevenue);

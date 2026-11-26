@@ -140,6 +140,18 @@ const eventSchema = new mongoose.Schema({
     rawWorkbookRowsCount: { type: Number, default: 0 },
     uniqueGuestGroupsCount: { type: Number, default: 0 },
 
+    // Quotation Rate Sheet Matrix (Car Name columns x Service Requirement rows)
+    selectedCars: [{
+        name: { type: String, required: true },
+        subtitle: { type: String, default: '' }
+    }],
+    serviceRequirements: [{
+        type: String
+    }],
+    rateMatrix: [{
+        serviceName: { type: String, required: true },
+        rates: { type: mongoose.Schema.Types.Mixed, default: {} }
+    }],
     // Tariff / Rate Cards defined for this specific event
     rateCard: [{
         serviceName: { type: String, required: true },
