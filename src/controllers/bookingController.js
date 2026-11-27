@@ -1073,11 +1073,11 @@ const assignBookingDrivers = asyncHandler(async (req, res) => {
                     seenKeys.add(key);
                     const assigned = normalizedItinerary.find(d => Number(d.dayNo) === Number(it.dayNo));
                     if (assigned) {
-                        it.driver = assigned.driver || it.driver;
-                        it.driverName = assigned.driverName || it.driverName;
-                        it.driverPhone = assigned.driverPhone || it.driverPhone;
-                        it.vehicle = assigned.vehicle || it.vehicle;
-                        it.vehicleNumber = assigned.vehicleNumber || it.vehicleNumber;
+                        it.driver = assigned.driver !== undefined ? assigned.driver : it.driver;
+                        it.driverName = assigned.driverName !== undefined ? assigned.driverName : it.driverName;
+                        it.driverPhone = assigned.driverPhone !== undefined ? assigned.driverPhone : it.driverPhone;
+                        it.vehicle = assigned.vehicle !== undefined ? assigned.vehicle : it.vehicle;
+                        it.vehicleNumber = assigned.vehicleNumber !== undefined ? assigned.vehicleNumber : it.vehicleNumber;
                     }
                     cleanItin.push(it);
                 }
